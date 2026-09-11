@@ -27,7 +27,7 @@ class RetryPolicy(
         completedAttempts: Int,
         retryAfter: Duration? = null,
     ): RetryDecision {
-        if (!isRetryableStatus(statusCode) || completedAttempts >= maxAttempts) {
+        if (!isRetryableHttpStatus(statusCode) || completedAttempts >= maxAttempts) {
             return RetryDecision(shouldRetry = false)
         }
 
@@ -44,7 +44,7 @@ class RetryPolicy(
         return RetryDecision(shouldRetry = true, delay = calculateBackoff(completedAttempts))
     }
 
-    private fun isRetryableStatus(statusCode: Int): Boolean =
+    fun isRetryableHttpStatus(statusCode: Int): Boolean =
         statusCode == 408 || statusCode == 429 || statusCode in 500..599
 
     private fun calculateBackoff(completedAttempts: Int): Duration {

@@ -17,3 +17,10 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+hook-relay:
+  worker:
+    batch-size: 20
+    lease-seconds: 30
+    request-timeout-seconds: 5
+    poll-interval-millis: 1000
