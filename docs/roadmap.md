@@ -15,7 +15,7 @@
 - [x] Flyway 초기 schema
 - [x] 이벤트와 전달 작업의 원자적 저장
 
-단위 테스트까지 통과했습니다. PostgreSQL의 고유 제약과 실제 트랜잭션 rollback은 5단계 통합 테스트에서 확인합니다.
+PostgreSQL 통합 테스트에서 고유 제약, 멱등 재요청과 충돌, 전달 작업 실패 시 트랜잭션 rollback을 확인했습니다.
 
 ## 3단계: 전달 Worker
 
@@ -24,7 +24,7 @@
 - [x] HMAC 서명 HTTP 요청
 - [x] 전달 시도 이력
 
-Worker 정책과 HTTP 요청 생성은 단위 테스트를 통과했습니다. 작업 선점과 lease token 갱신은 PostgreSQL 통합 테스트가 남아 있습니다.
+Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. PostgreSQL 통합 테스트에서는 잠긴 행을 기다리지 않고 건너뛰는 동작과 lease token을 이용한 재선점·늦은 결과 거부를 검증했습니다.
 
 ## 4단계: 실패 복구
 
@@ -35,7 +35,7 @@ Worker 정책과 HTTP 요청 생성은 단위 테스트를 통과했습니다. �
 
 ## 5단계: 검증과 설명
 
-- [ ] Testcontainers PostgreSQL 통합 테스트
+- [x] Testcontainers PostgreSQL 통합 테스트
 - [ ] WireMock 전달 실패 시나리오
 - [ ] 다중 Worker 중복 처리 검증
 - [ ] Micrometer 전달 지표

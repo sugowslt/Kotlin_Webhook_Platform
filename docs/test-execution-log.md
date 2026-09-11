@@ -28,4 +28,18 @@
 - 범위: 기존 20개 단위 테스트, HMAC 요청 생성, HTTP 상태별 결과 처리, 네트워크 실패와 Dead Letter, `Retry-After` 해석, 배치 내 오류 격리
 - 제외: PostgreSQL 작업 선점 SQL, lease 만료 후 재선점, 실제 HTTP 서버, 다중 Worker
 
-작업 선점 SQL과 시도 이력 저장은 코드와 migration만 반영된 상태입니다. Docker 기반 PostgreSQL 통합 테스트 전에는 실제 동작을 확인한 것으로 보지 않습니다.
+이 실행 시점에는 작업 선점 SQL과 시도 이력 저장을 코드와 migration으로만 확인했습니다. 실제 DB 결과는 아래 PostgreSQL 통합 테스트에 따로 기록했습니다.
+
+## 2026-09-11 PostgreSQL 통합 테스트
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2
+- 컨테이너: PostgreSQL 17 Alpine, Testcontainers 2.0.5
+- 최종 명령: `gradlew.bat test --rerun-tasks`
+- 최종 결과: 33개 성공, 실패 0개, 오류 0개, skipped 0개
+- 통합 테스트: 5개 성공
+- 범위: Flyway migration, 멱등 저장과 충돌, 트랜잭션 rollback, `FOR UPDATE SKIP LOCKED`, lease 만료 후 재선점, 이전 lease token 결과 거부, 시도 이력 저장
+- 제외: 실제 HTTP 서버, 다중 Worker 프로세스, 부하 측정
+
+첫 실행은 `com.fasterxml.jackson.databind.ObjectMapper` bean이 없어 애플리케이션 컨텍스트 초기화 단계에서 5개가 실패했습니다. Spring Boot 4의 기본 JSON 구성에 기대지 않고 `com.fasterxml` ObjectMapper를 명시적으로 등록했습니다. 기존 코드와 테스트의 Jackson 패키지를 바꾸지 않으면서 런타임 의존성을 분명히 할 수 있어 이 방식을 선택했습니다.
+
+두 번째 실행에서는 3개가 성공하고 lease 관련 2개가 실패했습니다. 이벤트의 `next_attempt_at`은 애플리케이션 현재 시각으로 저장됐지만 테스트는 그보다 이른 고정 시각으로 선점을 시도한 것이 원인이었습니다. 임의 대기를 추가하지 않고 DB에 저장된 `next_attempt_at`을 읽어 lease 검증의 기준 시각으로 사용했습니다. 수정 후 통합 테스트 5개와 전체 테스트 33개가 모두 통과했습니다.

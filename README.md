@@ -17,9 +17,9 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 작업 선점 SQL, 실제 HTTP 요청은 PostgreSQL과 테스트 서버를 연결한 통합 테스트가 남아 있습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 실제 HTTP 서버를 연결한 전달 테스트와 다중 Worker 실행은 남아 있습니다.
 
-2026-09-11 로컬 Java 17 환경에서 단위 테스트 28개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 Docker와 외부 HTTP 요청은 이번 검증에 포함하지 않았습니다.
+2026-09-11 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 33개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 5개가 포함됩니다. 외부 HTTP 요청은 이번 검증에서 제외했습니다.
 
 ## 동작 흐름
 
@@ -54,8 +54,9 @@ flowchart LR
 - Spring MVC, JPA
 - Java HttpClient
 - Micrometer
+- Testcontainers
 
-Testcontainers, WireMock, Prometheus, Grafana 연동은 검증 단계에서 추가합니다.
+WireMock, Prometheus, Grafana 연동은 다음 검증 단계에서 추가합니다.
 
 Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 선점·재시도·복구 계약을 검증한 뒤 병목이 확인될 때 도입 여부를 판단합니다.
 
@@ -84,17 +85,17 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 
 같은 멱등키와 같은 요청을 다시 보내면 기존 이벤트 ID를 반환하고 `Idempotency-Replayed: true` 헤더를 붙입니다. 같은 키로 다른 이벤트 유형이나 본문을 보내면 `409 Conflict`로 처리합니다.
 
-## 검증할 시나리오
+## 검증 현황
 
-- 같은 멱등키를 두 번 보내도 전달 작업이 중복 생성되지 않는가
-- Worker 두 개가 같은 작업을 동시에 처리하지 않는가
-- timeout과 재시도 가능한 HTTP 상태를 정책대로 분류하는가
-- Worker가 처리 중 종료되어도 lease 만료 후 작업을 복구하는가
-- payload가 바뀌면 HMAC 검증이 실패하는가
-- localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
-- 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
+- [x] 같은 멱등키를 두 번 보내도 전달 작업이 중복 생성되지 않는가
+- [ ] Worker 두 개가 같은 작업을 동시에 처리하지 않는가
+- [x] timeout과 재시도 가능한 HTTP 상태를 정책대로 분류하는가
+- [x] Worker가 처리 중 종료되어도 lease 만료 후 작업을 복구하는가
+- [x] payload가 바뀌면 HMAC 검증이 실패하는가
+- [x] localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
+- [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
 
-실제 테스트 수와 성능 수치는 검증을 마친 뒤 실행 조건과 함께 기록합니다.
+성능 수치는 고정된 부하 조건을 정한 뒤 실행 환경과 함께 기록합니다.
 
 ## 문서
 
