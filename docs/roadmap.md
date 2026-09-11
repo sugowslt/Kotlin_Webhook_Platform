@@ -10,10 +10,12 @@
 
 ## 2단계: 이벤트 접수
 
-- [ ] 구독 등록 API
-- [ ] 이벤트 접수 API와 `Idempotency-Key`
-- [ ] Flyway 초기 schema
-- [ ] 이벤트와 전달 작업의 원자적 저장
+- [x] 구독 등록 API
+- [x] 이벤트 접수 API와 `Idempotency-Key`
+- [x] Flyway 초기 schema
+- [x] 이벤트와 전달 작업의 원자적 저장
+
+단위 테스트까지 통과했습니다. PostgreSQL의 고유 제약과 실제 트랜잭션 rollback은 5단계 통합 테스트에서 확인합니다.
 
 ## 3단계: 전달 Worker
 

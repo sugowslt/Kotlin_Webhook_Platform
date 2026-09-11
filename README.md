@@ -4,16 +4,19 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 
 ## 현재 상태
 
-첫 단계에서는 전달 정책의 기준부터 코드로 고정하고 있습니다.
+전달 정책을 먼저 고정한 뒤 구독 등록과 이벤트 접수까지 연결했습니다.
 
 - HMAC-SHA256 서명과 검증
 - HTTP 상태별 재시도 판단과 지수 backoff
 - Webhook URL의 scheme·userinfo·사설 주소 검사
-- PostgreSQL 작업 큐를 선택한 이유와 후속 검증 범위 문서화
+- 구독별 endpoint와 이벤트 유형 등록
+- `Idempotency-Key` 기반 이벤트 중복 방지
+- 이벤트와 전달 작업의 트랜잭션 저장
+- Flyway 초기 schema
 
-구독·이벤트 API, PostgreSQL delivery queue와 실제 HTTP Worker는 다음 단계에서 연결합니다. 아직 처리량이나 운영 안정성을 확인한 단계는 아닙니다.
+실제 HTTP 전달 Worker와 실패 복구는 다음 단계에서 연결합니다. Flyway schema와 트랜잭션 경계는 구현했지만 실제 PostgreSQL 통합 테스트는 아직 실행하지 않았습니다.
 
-2026-09-11 로컬 Java 17 환경에서 전달 정책 단위 테스트 13개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 Docker와 외부 HTTP 요청은 이번 검증에 포함하지 않았습니다.
+2026-09-11 로컬 Java 17 환경에서 단위 테스트 20개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 Docker와 외부 HTTP 요청은 이번 검증에 포함하지 않았습니다.
 
 ## 동작 흐름
 
@@ -46,10 +49,36 @@ flowchart LR
 - Spring Boot 4.0.3, Gradle
 - PostgreSQL, Flyway
 - Spring MVC, JPA
-- Testcontainers, WireMock
-- Micrometer, Prometheus, Grafana
+- Micrometer
+
+Testcontainers, WireMock, Prometheus, Grafana 연동은 검증 단계에서 추가합니다.
 
 Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 선점·재시도·복구 계약을 검증한 뒤 병목이 확인될 때 도입 여부를 판단합니다.
+
+## API 예시
+
+구독을 등록하면 Webhook 요청 검증에 사용할 서명 비밀값이 응답에 포함됩니다.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "order receiver",
+    "endpointUrl": "https://hooks.example.com/events",
+    "eventTypes": ["order.created", "order.cancelled"]
+  }'
+```
+
+이벤트 접수 API는 JSON 본문과 멱등키를 받아 대상 구독 수만큼 전달 작업을 만듭니다.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/events/order.created \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: order-20260911-1" \
+  -d '{"orderId": 1001}'
+```
+
+같은 멱등키와 같은 요청을 다시 보내면 기존 이벤트 ID를 반환하고 `Idempotency-Replayed: true` 헤더를 붙입니다. 같은 키로 다른 이벤트 유형이나 본문을 보내면 `409 Conflict`로 처리합니다.
 
 ## 검증할 시나리오
 
