@@ -17,9 +17,9 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 실제 HTTP 서버를 연결한 전달 테스트와 다중 Worker 실행은 남아 있습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. 다중 Worker 실행과 부하 측정은 남아 있습니다.
 
-2026-09-11 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 33개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 5개가 포함됩니다. 외부 HTTP 요청은 이번 검증에서 제외했습니다.
+2026-09-11 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 36개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 5개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -55,8 +55,9 @@ flowchart LR
 - Java HttpClient
 - Micrometer
 - Testcontainers
+- WireMock
 
-WireMock, Prometheus, Grafana 연동은 다음 검증 단계에서 추가합니다.
+Prometheus와 Grafana 연동은 다음 검증 단계에서 추가합니다.
 
 Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 선점·재시도·복구 계약을 검증한 뒤 병목이 확인될 때 도입 여부를 판단합니다.
 

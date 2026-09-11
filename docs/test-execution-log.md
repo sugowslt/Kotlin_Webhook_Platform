@@ -43,3 +43,15 @@
 첫 실행은 `com.fasterxml.jackson.databind.ObjectMapper` bean이 없어 애플리케이션 컨텍스트 초기화 단계에서 5개가 실패했습니다. Spring Boot 4의 기본 JSON 구성에 기대지 않고 `com.fasterxml` ObjectMapper를 명시적으로 등록했습니다. 기존 코드와 테스트의 Jackson 패키지를 바꾸지 않으면서 런타임 의존성을 분명히 할 수 있어 이 방식을 선택했습니다.
 
 두 번째 실행에서는 3개가 성공하고 lease 관련 2개가 실패했습니다. 이벤트의 `next_attempt_at`은 애플리케이션 현재 시각으로 저장됐지만 테스트는 그보다 이른 고정 시각으로 선점을 시도한 것이 원인이었습니다. 임의 대기를 추가하지 않고 DB에 저장된 `next_attempt_at`을 읽어 lease 검증의 기준 시각으로 사용했습니다. 수정 후 통합 테스트 5개와 전체 테스트 33개가 모두 통과했습니다.
+
+## 2026-09-11 실제 HTTP 전달 테스트
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1
+- 테스트 서버: WireMock 3.13.2 standalone, 동적 로컬 포트
+- 최종 명령: `gradlew.bat test --rerun-tasks`
+- 최종 결과: 36개 성공, 실패 0개, 오류 0개, skipped 0개
+- HTTP 통합 테스트: 3개 성공
+- 범위: JSON 본문, HMAC 서명과 timestamp·delivery ID 헤더, 503 `Retry-After`, redirect 차단
+- 제외: 인터넷 외부 주소, 다중 Worker 프로세스, 부하 측정
+
+첫 실행에서는 WireMock 서버가 Jetty 11 구현을 찾지 못해 HTTP 통합 테스트 3개가 서버 시작 단계에서 실패했습니다. Spring Boot 4가 관리하는 Jetty 버전을 바꾸면 애플리케이션 전체 의존성에 영향을 줄 수 있어 WireMock을 standalone JAR로 교체했습니다. WireMock 내부 서버 의존성을 테스트 범위에 격리한 뒤 HTTP 통합 테스트 3개와 전체 테스트 36개가 모두 통과했습니다.
