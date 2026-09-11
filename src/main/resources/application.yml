@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: hook-relay
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/hook_relay}
+    username: ${DB_USERNAME:hook_relay}
+    password: ${DB_PASSWORD:hook_relay}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
