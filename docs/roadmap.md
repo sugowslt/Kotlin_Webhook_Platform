@@ -19,15 +19,17 @@
 
 ## 3단계: 전달 Worker
 
-- [ ] `FOR UPDATE SKIP LOCKED` 작업 선점
-- [ ] lease 만료와 재선점
-- [ ] HMAC 서명 HTTP 요청
-- [ ] 전달 시도 이력
+- [x] `FOR UPDATE SKIP LOCKED` 작업 선점
+- [x] lease 만료와 재선점
+- [x] HMAC 서명 HTTP 요청
+- [x] 전달 시도 이력
+
+Worker 정책과 HTTP 요청 생성은 단위 테스트를 통과했습니다. 작업 선점과 lease token 갱신은 PostgreSQL 통합 테스트가 남아 있습니다.
 
 ## 4단계: 실패 복구
 
-- [ ] timeout·`408`·`429`·`5xx` 재시도
-- [ ] 최대 횟수 초과 시 Dead Letter 전환
+- [x] timeout·`408`·`429`·`5xx` 재시도
+- [x] 최대 횟수 초과 시 Dead Letter 전환
 - [ ] 수동 재전송 API
 - [ ] 프로세스 종료 후 복구 시나리오
 

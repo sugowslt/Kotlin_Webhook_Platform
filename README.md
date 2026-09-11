@@ -13,10 +13,13 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - `Idempotency-Key` 기반 이벤트 중복 방지
 - 이벤트와 전달 작업의 트랜잭션 저장
 - Flyway 초기 schema
+- `FOR UPDATE SKIP LOCKED`와 lease token 기반 작업 선점
+- HMAC 서명 HTTP 전달과 시도 이력 저장
+- `Retry-After`와 지수 backoff를 반영한 재시도
 
-실제 HTTP 전달 Worker와 실패 복구는 다음 단계에서 연결합니다. Flyway schema와 트랜잭션 경계는 구현했지만 실제 PostgreSQL 통합 테스트는 아직 실행하지 않았습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 작업 선점 SQL, 실제 HTTP 요청은 PostgreSQL과 테스트 서버를 연결한 통합 테스트가 남아 있습니다.
 
-2026-09-11 로컬 Java 17 환경에서 단위 테스트 20개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 Docker와 외부 HTTP 요청은 이번 검증에 포함하지 않았습니다.
+2026-09-11 로컬 Java 17 환경에서 단위 테스트 28개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 Docker와 외부 HTTP 요청은 이번 검증에 포함하지 않았습니다.
 
 ## 동작 흐름
 
@@ -49,6 +52,7 @@ flowchart LR
 - Spring Boot 4.0.3, Gradle
 - PostgreSQL, Flyway
 - Spring MVC, JPA
+- Java HttpClient
 - Micrometer
 
 Testcontainers, WireMock, Prometheus, Grafana 연동은 검증 단계에서 추가합니다.
