@@ -17,9 +17,9 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. 다중 Worker 실행과 부하 측정은 남아 있습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. 부하 측정은 남아 있습니다.
 
-2026-09-11 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 36개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 5개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 38개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 7개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -89,7 +89,7 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 ## 검증 현황
 
 - [x] 같은 멱등키를 두 번 보내도 전달 작업이 중복 생성되지 않는가
-- [ ] Worker 두 개가 같은 작업을 동시에 처리하지 않는가
+- [x] Worker 두 개가 같은 작업을 동시에 처리하지 않는가
 - [x] timeout과 재시도 가능한 HTTP 상태를 정책대로 분류하는가
 - [x] Worker가 처리 중 종료되어도 lease 만료 후 작업을 복구하는가
 - [x] payload가 바뀌면 HMAC 검증이 실패하는가

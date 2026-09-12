@@ -55,3 +55,15 @@
 - 제외: 인터넷 외부 주소, 다중 Worker 프로세스, 부하 측정
 
 첫 실행에서는 WireMock 서버가 Jetty 11 구현을 찾지 못해 HTTP 통합 테스트 3개가 서버 시작 단계에서 실패했습니다. Spring Boot 4가 관리하는 Jetty 버전을 바꾸면 애플리케이션 전체 의존성에 영향을 줄 수 있어 WireMock을 standalone JAR로 교체했습니다. WireMock 내부 서버 의존성을 테스트 범위에 격리한 뒤 HTTP 통합 테스트 3개와 전체 테스트 36개가 모두 통과했습니다.
+
+## 2026-09-12 다중 Worker 중복 처리
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2
+- 컨테이너: PostgreSQL 17 Alpine, Testcontainers 2.0.5
+- 최종 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 최종 결과: 38개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 7개 성공
+- 범위: 두 독립 트랜잭션의 동시 작업 선점, 첫 Worker가 전달 중일 때 두 번째 Worker의 중복 선점과 `WebhookHttpClient` 중복 호출 방지, lease token 결과 기록
+- 제외: 별도 프로세스나 컨테이너로 실행한 Worker, 외부 인터넷 HTTP 요청, 부하 측정
+
+먼저 두 스레드가 같은 전달 작업을 동시에 선점하도록 실행해 반환된 작업 ID가 하나뿐인지 확인했습니다. Worker 수준 테스트에서는 첫 Worker의 전달 응답을 대기시킨 상태로 두 번째 Worker를 실행했습니다. 두 번째 Worker는 처리할 작업을 가져오지 않았고 `WebhookHttpClient` 호출과 전달 시도 이력도 한 번만 기록됐습니다.

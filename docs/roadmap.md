@@ -37,7 +37,7 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 
 - [x] Testcontainers PostgreSQL 통합 테스트
 - [x] WireMock 전달 실패 시나리오
-- [ ] 다중 Worker 중복 처리 검증
+- [x] 다중 Worker 중복 처리 검증
 - [ ] Micrometer 전달 지표
 - [ ] 고정 조건 부하 측정
 - [ ] Docker Compose 실행 경로와 시연 화면
