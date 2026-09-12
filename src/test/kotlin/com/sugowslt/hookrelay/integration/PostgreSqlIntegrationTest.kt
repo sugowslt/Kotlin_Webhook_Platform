@@ -5,10 +5,17 @@ import com.sugowslt.hookrelay.delivery.ClaimedDelivery
 import com.sugowslt.hookrelay.delivery.DeliveryQueue
 import com.sugowslt.hookrelay.delivery.DeliveryResolution
 import com.sugowslt.hookrelay.delivery.DeliveryStore
+import com.sugowslt.hookrelay.delivery.RetryPolicy
+import com.sugowslt.hookrelay.delivery.WebhookDeliveryWorker
+import com.sugowslt.hookrelay.delivery.WebhookHttpClient
+import com.sugowslt.hookrelay.delivery.WebhookHttpResponse
 import com.sugowslt.hookrelay.event.AcceptEventCommand
 import com.sugowslt.hookrelay.event.EventIntakeService
 import com.sugowslt.hookrelay.event.IdempotencyKeyConflictException
 import com.sugowslt.hookrelay.event.WebhookEventStore
+import com.sugowslt.hookrelay.security.HostResolver
+import com.sugowslt.hookrelay.security.WebhookSignatureService
+import com.sugowslt.hookrelay.security.WebhookUrlPolicy
 import com.sugowslt.hookrelay.subscription.SubscriptionStore
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Timeout
@@ -20,13 +27,17 @@ import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.postgresql.PostgreSQLContainer
+import java.net.InetAddress
 import java.sql.Timestamp
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.sql.DataSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -200,6 +211,73 @@ class PostgreSqlIntegrationTest {
         }
     }
 
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    fun `두 동시 선점 요청은 같은 작업을 중복 반환하지 않는다`() {
+        insertSubscription("order.created")
+        eventIntakeService.accept(eventCommand("concurrent-event", "{\"orderId\":1}"))
+        val claimAt = nextAttemptAt()
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val futures = (1..2).map {
+                executor.submit<List<ClaimedDelivery>> {
+                    ready.countDown()
+                    start.await()
+                    deliveryQueue.claim(1, Duration.ofSeconds(10), claimAt)
+                }
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+
+            val claimed = futures.flatMap { it.get(5, TimeUnit.SECONDS) }
+
+            assertEquals(1, claimed.size)
+            assertEquals(1, claimed.map(ClaimedDelivery::id).distinct().size)
+            assertEquals("PROCESSING", deliveryStatus(claimed.single().id))
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    fun `첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 처리하지 않는다`() {
+        insertSubscription("order.created")
+        eventIntakeService.accept(eventCommand("worker-concurrent-event", "{\"orderId\":1}"))
+        val claimAt = nextAttemptAt()
+        val deliveryId = singleDeliveryId()
+        val requestStarted = CountDownLatch(1)
+        val releaseResponse = CountDownLatch(1)
+        val requestCount = AtomicInteger()
+        val httpClient = WebhookHttpClient {
+            requestCount.incrementAndGet()
+            requestStarted.countDown()
+            assertTrue(releaseResponse.await(5, TimeUnit.SECONDS))
+            WebhookHttpResponse(statusCode = 204, retryAfter = null)
+        }
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val first = executor.submit<Int> { worker(httpClient, claimAt).processBatch() }
+            assertTrue(requestStarted.await(5, TimeUnit.SECONDS))
+
+            val second = executor.submit<Int> { worker(httpClient, claimAt).processBatch() }
+            assertEquals(0, second.get(5, TimeUnit.SECONDS))
+
+            releaseResponse.countDown()
+            assertEquals(1, first.get(5, TimeUnit.SECONDS))
+            assertEquals(1, requestCount.get())
+            assertEquals("SUCCEEDED", deliveryStatus(deliveryId))
+            assertEquals(1, count("webhook_delivery_attempts"))
+        } finally {
+            releaseResponse.countDown()
+            executor.shutdownNow()
+        }
+    }
+
     private fun insertSubscription(eventType: String): UUID {
         val subscriptionId = UUID.randomUUID()
         jdbcTemplate.update(
@@ -243,12 +321,36 @@ class PostgreSqlIntegrationTest {
         ),
     )
 
+    private fun singleDeliveryId(): UUID = checkNotNull(
+        jdbcTemplate.queryForObject(
+            "SELECT id FROM webhook_deliveries",
+            UUID::class.java,
+        ),
+    )
+
     private fun nextAttemptAt(): Instant = checkNotNull(
         jdbcTemplate.queryForObject(
             "SELECT MIN(next_attempt_at) FROM webhook_deliveries",
             Timestamp::class.java,
         ),
     ).toInstant()
+
+    private fun worker(httpClient: WebhookHttpClient, instant: Instant): WebhookDeliveryWorker =
+        WebhookDeliveryWorker(
+            deliveryQueue = deliveryQueue,
+            httpClient = httpClient,
+            signatureService = WebhookSignatureService(),
+            webhookUrlPolicy = WebhookUrlPolicy(
+                hostResolver = HostResolver {
+                    listOf(InetAddress.getByAddress(byteArrayOf(93, 184.toByte(), 216.toByte(), 34)))
+                },
+            ),
+            retryPolicy = RetryPolicy(random = { 0.5 }),
+            clock = Clock.fixed(instant, ZoneOffset.UTC),
+            batchSize = 1,
+            leaseSeconds = 30,
+            requestTimeoutSeconds = 5,
+        )
 
     companion object {
         private val ALLOWED_TABLES = setOf(
