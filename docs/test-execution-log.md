@@ -132,3 +132,19 @@
 첫 컴파일에서는 새 예외의 nullable `message`를 오류 응답의 non-null 필드에 넘겨 실패했습니다. 예외 코드별 기본 메시지를 두어 응답 계약을 유지했습니다.
 
 첫 Compose 시연에서는 bind mount 파일이 바뀌었지만 실행 중인 Python 수신기 프로세스는 이전 코드를 유지해 재전송도 `404`로 끝났습니다. 시연 스크립트에서 수신기만 명시적으로 재시작하고 health check를 다시 기다리도록 수정했습니다. 다음 실행에서는 이전 시연의 고정 이벤트 유형 구독이 남아 전달 ID가 여러 개 조회됐습니다. 데이터를 지우는 대신 실행마다 고유 이벤트 유형을 만들고 단일값 조회 결과 개수를 검사하도록 바꿨습니다. 보완 후 수동 재전송 시연을 연속 두 번 실행했고 두 번 모두 `FAILED,SUCCEEDED` 이력을 확인했습니다. 기존 `run-demo.ps1` 성공 경로도 다시 실행해 정상 완료를 확인했습니다.
+
+## 2026-09-12 Worker 강제 종료 복구
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2, Docker Compose 5.5.1
+- 전체 테스트 명령: `gradlew.bat test --rerun-tasks`
+- 전체 테스트 결과: 47개 성공, 실패 0개, 오류 0개, skipped 0개
+- 시연 명령: `.\demo\run-crash-recovery-demo.ps1`
+- 종료 방식: 전달 요청 응답 대기 중 `docker compose kill app`의 기본 `SIGKILL`
+- 종료 직후 DB 상태: `PROCESSING`, 시도 횟수 0회, 완료 이력 0건
+- 복구 조건: 30초 lease 만료 이후 같은 전달 ID 재선점
+- 최종 DB 상태: `SUCCEEDED`, 시도 횟수 1회, 이력 `SUCCEEDED`
+- 수신기 대조: 같은 전달 ID의 요청 2건, 첫 요청 `HELD`, 복구 요청 `204`
+
+강제 종료 복구 시연은 연속 두 번 실행했습니다. 두 실행 모두 재선점 시각이 기존 lease 만료 시각보다 빠르지 않았고 최종 상태가 `SUCCEEDED|1|SUCCEEDED`로 끝났습니다. 수신기에는 같은 전달 ID가 두 번 남아 at-least-once 동작도 확인했습니다.
+
+수신기 변경 후 `.\demo\run-redelivery-demo.ps1`과 `.\demo\run-demo.ps1`도 다시 실행했습니다. 수동 재전송은 `FAILED,SUCCEEDED`, 기본 전달은 모든 작업이 `SUCCEEDED`로 끝났습니다. 시연 중 PostgreSQL과 Docker volume은 삭제하지 않았습니다.

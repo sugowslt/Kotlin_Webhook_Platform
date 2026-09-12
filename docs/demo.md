@@ -47,6 +47,24 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 5. 같은 전달 ID의 두 번째 요청이 `204`로 끝나는지 확인합니다.
 6. 최종 상태 `SUCCEEDED`, 시도 횟수 2회, 이력 `FAILED,SUCCEEDED`를 대조합니다.
 
+### Worker 강제 종료 복구
+
+```powershell
+.\demo\run-crash-recovery-demo.ps1
+```
+
+스크립트는 실제 프로세스 중단 상황을 아래 순서로 재현합니다.
+
+1. 실행마다 고유 이벤트 유형과 60초 동안 첫 응답을 보류하는 구독을 만듭니다.
+2. 수신 로그와 DB에서 전달이 `PROCESSING`인지 확인합니다.
+3. `docker compose kill app`으로 애플리케이션에 `SIGKILL`을 보냅니다.
+4. 전달 상태가 `PROCESSING`, 시도 횟수와 완료 이력이 0건인 상태로 남았는지 확인합니다.
+5. 애플리케이션을 다시 시작하고 30초 lease가 만료될 때까지 기다립니다.
+6. 재선점 시각이 lease 만료 이후인지, 최종 상태와 이력이 `SUCCEEDED|1|SUCCEEDED`인지 검사합니다.
+7. 같은 전달 ID가 수신기에 `HELD`, `204` 두 번 기록됐는지 확인합니다.
+
+이 시나리오는 PostgreSQL에 저장한 작업이 Worker 종료 후 복구되는지 확인합니다. 첫 요청이 외부 서버에 도착한 뒤 결과 기록 전에 Worker가 종료되므로 수신기에는 같은 전달 ID가 두 번 도착합니다. 전달 대상은 `X-HookRelay-Delivery`를 멱등키로 사용해 중복 처리를 막아야 합니다.
+
 정상 실행 후 아래 화면을 확인할 수 있습니다.
 
 - Grafana: [Hook Relay Overview](http://127.0.0.1:3000/d/hook-relay-overview)

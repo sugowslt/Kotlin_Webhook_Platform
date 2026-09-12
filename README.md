@@ -14,6 +14,7 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - 이벤트와 전달 작업의 트랜잭션 저장
 - Flyway 초기 schema
 - `FOR UPDATE SKIP LOCKED`와 lease token 기반 작업 선점
+- Worker 강제 종료 후 lease 만료 작업 재선점
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 - `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
@@ -21,7 +22,7 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - k6로 고정 요청률 이벤트 접수 측정
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. Compose에서는 HTTP 응답 대기 중 Worker를 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 복구하는 과정을 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
 2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 47개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 12개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
@@ -52,6 +53,7 @@ flowchart LR
 - timeout, `408`, `429`, `5xx`는 재시도하고 나머지 `4xx`는 영구 실패로 분류합니다.
 - 최대 시도 횟수를 넘긴 작업은 Dead Letter 상태로 옮깁니다.
 - `FAILED`와 `DEAD_LETTER`만 수동 재전송할 수 있습니다. 기존 전달 ID·시도 횟수·이력은 유지하고 대기열에 다시 넣습니다.
+- 전달 보장은 at-least-once입니다. 외부 서버가 요청을 처리한 직후 Worker가 종료되면 같은 전달 ID가 다시 전송될 수 있습니다.
 - Webhook 요청은 HMAC-SHA256으로 서명합니다.
 - 사용자가 등록한 URL을 서버가 호출하므로 SSRF 방어를 별도 경계로 둡니다.
 
@@ -93,6 +95,12 @@ Docker Desktop을 실행한 뒤 PowerShell에서 아래 명령을 사용합니�
 
 ```powershell
 .\demo\run-redelivery-demo.ps1
+```
+
+Worker 강제 종료 후 복구는 아래 스크립트로 확인합니다. 첫 요청을 수신기가 보류한 상태에서 애플리케이션만 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 다시 보내는지 검사합니다.
+
+```powershell
+.\demo\run-crash-recovery-demo.ps1
 ```
 
 ```powershell
@@ -139,7 +147,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 - [x] 같은 멱등키를 두 번 보내도 전달 작업이 중복 생성되지 않는가
 - [x] Worker 두 개가 같은 작업을 동시에 처리하지 않는가
 - [x] timeout과 재시도 가능한 HTTP 상태를 정책대로 분류하는가
-- [ ] 실제 Worker 프로세스를 종료해도 lease 만료 후 작업을 복구하는가
+- [x] 실제 Worker 프로세스를 종료해도 lease 만료 후 작업을 복구하는가
 - [x] payload가 바뀌면 HMAC 검증이 실패하는가
 - [x] localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
@@ -150,6 +158,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 ## 문서
 
 - [PostgreSQL 작업 큐를 먼저 사용하는 이유](docs/adr/0001-postgresql-delivery-queue.md)
+- [Webhook 전달을 at-least-once로 복구하는 이유](docs/adr/0002-at-least-once-delivery.md)
 - [구현 순서와 완료 기준](docs/roadmap.md)
 - [테스트 실행 기록](docs/test-execution-log.md)
 - [이벤트 접수 부하 측정](docs/load-test.md)
@@ -166,5 +175,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 - [Micrometer metric naming](https://docs.micrometer.io/micrometer/reference/concepts/naming.html)
 - [k6 constant arrival rate](https://grafana.com/docs/k6/latest/using-k6/scenarios/executors/constant-arrival-rate/)
 - [Docker Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/)
+- [Docker Compose 강제 종료](https://docs.docker.com/reference/cli/docker/compose/kill/)
+- [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/17/sql-select.html)
 - [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)

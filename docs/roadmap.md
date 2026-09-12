@@ -32,7 +32,7 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 - [x] 최대 횟수 초과 시 Dead Letter 전환
 - [x] `FAILED`·`DEAD_LETTER` 수동 재전송 API
 - [x] 동시 재전송 요청의 단일 상태 전이
-- [ ] 프로세스 종료 후 복구 시나리오
+- [x] 프로세스 종료 후 lease 만료 복구 시나리오
 
 ## 5단계: 검증과 설명
 
@@ -43,6 +43,7 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 - [x] 고정 조건 부하 측정
 - [x] Docker Compose 기본 전달 시연
 - [x] Docker Compose 실패 후 수동 재전송 시연
+- [x] Docker Compose Worker 강제 종료 복구 시연
 - [x] Docker Compose 실행 경로와 시연 화면
 
 Worker 선점 수와 결과별 처리 횟수·소요 시간을 Micrometer로 기록하고 Prometheus endpoint 노출까지 확인했습니다. 결과 태그는 여섯 값으로 제한했으며 전달 ID, 구독 ID, endpoint URL은 넣지 않았습니다.
