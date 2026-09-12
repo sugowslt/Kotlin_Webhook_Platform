@@ -40,8 +40,10 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 - [x] 다중 Worker 중복 처리 검증
 - [x] Micrometer 전달 지표
 - [x] 고정 조건 부하 측정
-- [ ] Docker Compose 실행 경로와 시연 화면
+- [x] Docker Compose 실행 경로와 시연 화면
 
 Worker 선점 수와 결과별 처리 횟수·소요 시간을 Micrometer로 기록하고 Prometheus endpoint 노출까지 확인했습니다. 결과 태그는 여섯 값으로 제한했으며 전달 ID, 구독 ID, endpoint URL은 넣지 않았습니다.
 
 이벤트 접수 경로는 k6로 초당 50건을 60초 동안 측정했습니다. 응답 시간 목표를 미리 정하지 않고 실제 측정값과 환경, 제외 범위를 함께 기록했습니다. Worker HTTP 전달 처리량은 별도 측정이 필요합니다.
+
+Docker Compose로 애플리케이션, PostgreSQL, 로컬 Webhook 수신기, Prometheus, Grafana를 함께 실행합니다. 한 번의 스크립트 실행으로 구독 등록부터 실제 전달 성공과 지표 노출까지 확인할 수 있습니다.

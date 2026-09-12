@@ -98,3 +98,19 @@
 한 번의 이벤트 접수에서 구독 조회와 전달 작업 1건 저장까지 실행되도록 활성 구독을 1개 등록했습니다. Worker 주기는 1시간으로 늘려 측정 중 HTTP 전달이 실행되지 않도록 했고 DB에서 모든 전달 작업이 `PENDING`, 전달 시도 이력이 0건인 것을 확인했습니다.
 
 상세 조건과 재현 명령은 [이벤트 접수 부하 측정](load-test.md)에 기록했습니다.
+
+## 2026-09-12 Docker Compose 로컬 시연
+
+- 환경: Windows, Java 17.0.18, Docker 29.7.2, Docker Compose 5.5.1
+- 애플리케이션 이미지: Gradle 9.3.1 JDK 17 빌드, Eclipse Temurin 17 JRE 실행
+- 구성: 애플리케이션, PostgreSQL 17, Python 3.13 Webhook 수신기, Prometheus 3.13.3, Grafana 12.3.1
+- 실행 명령: `.\demo\run-demo.ps1`
+- 전체 테스트: 43개 성공, 실패 0개, 오류 0개, skipped 0개
+- 서비스 상태: 5개 기동, 애플리케이션·PostgreSQL·Webhook 수신기·Prometheus·Grafana 정상
+- 전달 검증: 구독 1개 등록, 이벤트 1개 접수, 전달 작업 1개 `SUCCEEDED`
+- 관측 검증: Prometheus target `up`, Grafana `Hook Relay Overview` 6개 패널 렌더링
+- 격리 확인: 애플리케이션 이미지는 `hookrelay` 사용자로 실행, 호스트 공개 포트는 `127.0.0.1`에만 바인딩
+
+첫 빌드는 Gradle 사용자가 `/workspace/.gradle`을 만들 수 없어 중단됐습니다. 작업 경로를 Gradle 홈 아래로 옮긴 두 번째 시도도 Docker가 새 하위 디렉터리를 root 소유로 생성해 같은 오류가 발생했습니다. 경로를 바꾸는 대신 빌드 단계에서 `/workspace` 소유권만 `gradle` 사용자에게 부여했습니다. 빌드 사용자에게 추가 권한을 주지 않으면서 캐시와 산출물을 쓸 수 있어 이 방식을 사용했습니다.
+
+이미지 빌드 후에는 Webhook 수신기가 실행 중인데도 health check의 `wget`이 `localhost:8081` 연결을 거부해 unhealthy 상태가 됐습니다. 컨테이너 안에서 `127.0.0.1:8081/health`가 정상 응답하는 것을 확인하고 health check 주소를 IPv4 loopback으로 고정했습니다. 수정 후 5개 서비스가 모두 기동됐고 구독 등록, 이벤트 접수, HMAC 헤더가 포함된 실제 로컬 전달, DB 상태, Prometheus 수집, Grafana 화면을 순서대로 확인했습니다.
