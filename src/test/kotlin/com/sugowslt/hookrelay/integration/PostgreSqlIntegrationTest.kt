@@ -2,6 +2,8 @@ package com.sugowslt.hookrelay.integration
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sugowslt.hookrelay.delivery.ClaimedDelivery
+import com.sugowslt.hookrelay.delivery.DeliveryMetrics
+import com.sugowslt.hookrelay.delivery.DeliveryMetricOutcome
 import com.sugowslt.hookrelay.delivery.DeliveryQueue
 import com.sugowslt.hookrelay.delivery.DeliveryResolution
 import com.sugowslt.hookrelay.delivery.DeliveryStore
@@ -17,12 +19,16 @@ import com.sugowslt.hookrelay.security.HostResolver
 import com.sugowslt.hookrelay.security.WebhookSignatureService
 import com.sugowslt.hookrelay.security.WebhookUrlPolicy
 import com.sugowslt.hookrelay.subscription.SubscriptionStore
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Timeout
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -47,6 +53,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @Testcontainers
+@AutoConfigureMockMvc
 @SpringBootTest(
     properties = [
         "hook-relay.worker.poll-interval-millis=3600000",
@@ -70,6 +77,12 @@ class PostgreSqlIntegrationTest {
 
     @Autowired
     private lateinit var deliveryQueue: DeliveryQueue
+
+    @Autowired
+    private lateinit var deliveryMetrics: DeliveryMetrics
+
+    @Autowired
+    private lateinit var mockMvc: MockMvc
 
     @Autowired
     private lateinit var objectMapper: ObjectMapper
@@ -100,6 +113,22 @@ class PostgreSqlIntegrationTest {
         assertTrue(tables.contains("webhook_events"))
         assertTrue(tables.contains("webhook_deliveries"))
         assertTrue(tables.contains("webhook_delivery_attempts"))
+    }
+
+    @Test
+    fun `Prometheus endpoint가 전달 지표를 scrape 형식으로 노출한다`() {
+        deliveryMetrics.recordClaimed(2)
+        val sample = deliveryMetrics.startProcessing()
+        deliveryMetrics.recordProcessing(sample, DeliveryMetricOutcome.SUCCEEDED)
+
+        val response = mockMvc.perform(get("/actuator/prometheus"))
+            .andReturn()
+            .response
+        val body = response.contentAsString
+
+        assertEquals(200, response.status)
+        assertTrue(body.contains("hookrelay_delivery_claimed_total"))
+        assertTrue(body.contains("hookrelay_delivery_processing_seconds_count{outcome=\"succeeded\"}"))
     }
 
     @Test
@@ -346,6 +375,7 @@ class PostgreSqlIntegrationTest {
                 },
             ),
             retryPolicy = RetryPolicy(random = { 0.5 }),
+            deliveryMetrics = DeliveryMetrics(SimpleMeterRegistry()),
             clock = Clock.fixed(instant, ZoneOffset.UTC),
             batchSize = 1,
             leaseSeconds = 30,

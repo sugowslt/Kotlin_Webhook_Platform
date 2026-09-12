@@ -8,6 +8,7 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration.options
 import com.sugowslt.hookrelay.security.HostResolver
 import com.sugowslt.hookrelay.security.WebhookSignatureService
 import com.sugowslt.hookrelay.security.WebhookUrlPolicy
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import java.net.InetAddress
@@ -111,6 +112,7 @@ class WebhookHttpIntegrationTest {
             },
         ),
         retryPolicy = RetryPolicy(random = { 0.5 }),
+        deliveryMetrics = DeliveryMetrics(SimpleMeterRegistry()),
         clock = Clock.fixed(now, ZoneOffset.UTC),
         batchSize = 1,
         leaseSeconds = 30,

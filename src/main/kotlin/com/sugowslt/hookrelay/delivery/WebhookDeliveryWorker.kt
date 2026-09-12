@@ -19,6 +19,7 @@ class WebhookDeliveryWorker(
     private val signatureService: WebhookSignatureService,
     private val webhookUrlPolicy: WebhookUrlPolicy,
     private val retryPolicy: RetryPolicy,
+    private val deliveryMetrics: DeliveryMetrics,
     private val clock: Clock,
     @Value("\${hook-relay.worker.batch-size:20}") private val batchSize: Int,
     @Value("\${hook-relay.worker.lease-seconds:30}") private val leaseSeconds: Long,
@@ -39,22 +40,35 @@ class WebhookDeliveryWorker(
             leaseDuration = Duration.ofSeconds(leaseSeconds),
             now = Instant.now(clock),
         )
+        deliveryMetrics.recordClaimed(claimed.size)
         claimed.forEach { delivery ->
-            try {
+            val sample = deliveryMetrics.startProcessing()
+            val outcome = try {
                 process(delivery)
             } catch (exception: RuntimeException) {
                 log.error("delivery.processing.failed deliveryId={}", delivery.id, exception)
+                DeliveryMetricOutcome.PROCESSING_ERROR
             }
+            deliveryMetrics.recordProcessing(sample, outcome)
         }
         return claimed.size
     }
 
-    private fun process(delivery: ClaimedDelivery) {
+    private fun process(delivery: ClaimedDelivery): DeliveryMetricOutcome {
         val resolution = resolve(delivery)
         val recorded = deliveryQueue.recordResult(delivery, resolution, Instant.now(clock))
         if (!recorded) {
             log.warn("delivery.result.ignored deliveryId={} reason=lease_lost", delivery.id)
+            return DeliveryMetricOutcome.LEASE_LOST
         }
+        return resolution.toMetricOutcome()
+    }
+
+    private fun DeliveryResolution.toMetricOutcome(): DeliveryMetricOutcome = when (this) {
+        is DeliveryResolution.Succeeded -> DeliveryMetricOutcome.SUCCEEDED
+        is DeliveryResolution.RetryAt -> DeliveryMetricOutcome.RETRY_SCHEDULED
+        is DeliveryResolution.Failed -> DeliveryMetricOutcome.FAILED
+        is DeliveryResolution.DeadLetter -> DeliveryMetricOutcome.DEAD_LETTER
     }
 
     private fun resolve(delivery: ClaimedDelivery): DeliveryResolution {

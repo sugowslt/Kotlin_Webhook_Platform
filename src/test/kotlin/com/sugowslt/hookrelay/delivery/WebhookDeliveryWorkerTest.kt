@@ -3,6 +3,7 @@ package com.sugowslt.hookrelay.delivery
 import com.sugowslt.hookrelay.security.HostResolver
 import com.sugowslt.hookrelay.security.WebhookSignatureService
 import com.sugowslt.hookrelay.security.WebhookUrlPolicy
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.io.IOException
 import java.net.InetAddress
 import java.time.Clock
@@ -17,6 +18,7 @@ import kotlin.test.assertIs
 class WebhookDeliveryWorkerTest {
     private val now = Instant.parse("2026-09-11T00:00:00Z")
     private val signatureService = WebhookSignatureService()
+    private lateinit var meterRegistry: SimpleMeterRegistry
     private val urlPolicy = WebhookUrlPolicy(
         hostResolver = HostResolver {
             listOf(InetAddress.getByAddress(byteArrayOf(93, 184.toByte(), 216.toByte(), 34)))
@@ -36,6 +38,8 @@ class WebhookDeliveryWorkerTest {
 
         val resolution = assertIs<DeliveryResolution.Succeeded>(queue.resolution)
         assertEquals(204, resolution.statusCode)
+        assertEquals(1.0, claimedCount())
+        assertEquals(1L, processingCount("succeeded"))
         assertEquals(
             signatureService.sign(
                 secret = "signing-secret",
@@ -59,6 +63,7 @@ class WebhookDeliveryWorkerTest {
         val resolution = assertIs<DeliveryResolution.RetryAt>(queue.resolution)
         assertEquals(now.plusSeconds(1), resolution.nextAttemptAt)
         assertEquals(503, resolution.statusCode)
+        assertEquals(1L, processingCount("retry_scheduled"))
     }
 
     @Test
@@ -72,6 +77,7 @@ class WebhookDeliveryWorkerTest {
 
         val resolution = assertIs<DeliveryResolution.Failed>(queue.resolution)
         assertEquals(400, resolution.statusCode)
+        assertEquals(1L, processingCount("failed"))
     }
 
     @Test
@@ -83,6 +89,7 @@ class WebhookDeliveryWorkerTest {
 
         val resolution = assertIs<DeliveryResolution.DeadLetter>(queue.resolution)
         assertEquals("connection timed out; maximum attempts reached", resolution.errorMessage)
+        assertEquals(1L, processingCount("dead_letter"))
     }
 
     @Test
@@ -113,22 +120,61 @@ class WebhookDeliveryWorkerTest {
 
         assertEquals(2, worker.processBatch())
         assertEquals(1, recordedCount)
+        assertEquals(2.0, claimedCount())
+        assertEquals(1L, processingCount("processing_error"))
+        assertEquals(1L, processingCount("succeeded"))
+    }
+
+    @Test
+    fun `lease를 잃은 결과는 별도 지표로 기록한다`() {
+        val delivery = claimedDelivery()
+        val queue = object : DeliveryQueue {
+            override fun claim(batchSize: Int, leaseDuration: Duration, now: Instant): List<ClaimedDelivery> =
+                listOf(delivery)
+
+            override fun recordResult(
+                delivery: ClaimedDelivery,
+                resolution: DeliveryResolution,
+                finishedAt: Instant,
+            ): Boolean = false
+        }
+        val worker = worker(queue) {
+            WebhookHttpResponse(statusCode = 204, retryAfter = null)
+        }
+
+        assertEquals(1, worker.processBatch())
+        assertEquals(1L, processingCount("lease_lost"))
     }
 
     private fun worker(
         queue: DeliveryQueue,
         httpClient: WebhookHttpClient,
-    ): WebhookDeliveryWorker = WebhookDeliveryWorker(
-        deliveryQueue = queue,
-        httpClient = httpClient,
-        signatureService = signatureService,
-        webhookUrlPolicy = urlPolicy,
-        retryPolicy = RetryPolicy(random = { 0.5 }),
-        clock = Clock.fixed(now, ZoneOffset.UTC),
-        batchSize = 20,
-        leaseSeconds = 30,
-        requestTimeoutSeconds = 5,
-    )
+    ): WebhookDeliveryWorker {
+        meterRegistry = SimpleMeterRegistry()
+        return WebhookDeliveryWorker(
+            deliveryQueue = queue,
+            httpClient = httpClient,
+            signatureService = signatureService,
+            webhookUrlPolicy = urlPolicy,
+            retryPolicy = RetryPolicy(random = { 0.5 }),
+            deliveryMetrics = DeliveryMetrics(meterRegistry),
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+            batchSize = 20,
+            leaseSeconds = 30,
+            requestTimeoutSeconds = 5,
+        )
+    }
+
+    private fun claimedCount(): Double = meterRegistry
+        .get(DeliveryMetrics.CLAIMED_METRIC)
+        .counter()
+        .count()
+
+    private fun processingCount(outcome: String): Long = meterRegistry
+        .get(DeliveryMetrics.PROCESSING_METRIC)
+        .tag(DeliveryMetrics.OUTCOME_TAG, outcome)
+        .timer()
+        .count()
 
     private fun claimedDelivery(completedAttempts: Int = 0): ClaimedDelivery = ClaimedDelivery(
         id = UUID.randomUUID(),
