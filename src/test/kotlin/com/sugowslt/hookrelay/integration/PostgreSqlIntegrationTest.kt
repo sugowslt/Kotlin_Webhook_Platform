@@ -5,8 +5,11 @@ import com.sugowslt.hookrelay.delivery.ClaimedDelivery
 import com.sugowslt.hookrelay.delivery.DeliveryMetrics
 import com.sugowslt.hookrelay.delivery.DeliveryMetricOutcome
 import com.sugowslt.hookrelay.delivery.DeliveryQueue
+import com.sugowslt.hookrelay.delivery.DeliveryRedeliveryResult
+import com.sugowslt.hookrelay.delivery.DeliveryRedeliveryStore
 import com.sugowslt.hookrelay.delivery.DeliveryResolution
 import com.sugowslt.hookrelay.delivery.DeliveryStore
+import com.sugowslt.hookrelay.delivery.DeliveryStatus
 import com.sugowslt.hookrelay.delivery.RetryPolicy
 import com.sugowslt.hookrelay.delivery.WebhookDeliveryWorker
 import com.sugowslt.hookrelay.delivery.WebhookHttpClient
@@ -29,6 +32,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.transaction.support.TransactionTemplate
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -77,6 +81,9 @@ class PostgreSqlIntegrationTest {
 
     @Autowired
     private lateinit var deliveryQueue: DeliveryQueue
+
+    @Autowired
+    private lateinit var deliveryRedeliveryStore: DeliveryRedeliveryStore
 
     @Autowired
     private lateinit var deliveryMetrics: DeliveryMetrics
@@ -307,6 +314,112 @@ class PostgreSqlIntegrationTest {
         }
     }
 
+    @Test
+    fun `Dead Letter 전달을 수동 요청으로 다시 대기열에 넣는다`() {
+        insertSubscription("order.created")
+        eventIntakeService.accept(eventCommand("redelivery-event", "{\"orderId\":1}"))
+        val deliveryId = singleDeliveryId()
+        val claimAt = nextAttemptAt()
+        val claimed = deliveryQueue.claim(1, Duration.ofSeconds(10), claimAt).single()
+        assertTrue(
+            deliveryQueue.recordResult(
+                claimed,
+                DeliveryResolution.DeadLetter(503, "HTTP 503; maximum attempts reached"),
+                claimAt.plusSeconds(1),
+            ),
+        )
+
+        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+            .andReturn()
+            .response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(202, response.status)
+        assertEquals(deliveryId.toString(), body["deliveryId"].asText())
+        assertEquals("PENDING", body["status"].asText())
+        assertEquals(1, body["completedAttempts"].asInt())
+        assertEquals("PENDING", deliveryStatus(deliveryId))
+        assertEquals(1, deliveryAttemptCount(deliveryId))
+        assertEquals(1, count("webhook_delivery_attempts"))
+        assertEquals(null, deliveryLastError(deliveryId))
+    }
+
+    @Test
+    fun `완료된 전달의 수동 재전송은 충돌로 거부한다`() {
+        insertSubscription("order.created")
+        eventIntakeService.accept(eventCommand("succeeded-redelivery-event", "{\"orderId\":1}"))
+        val deliveryId = singleDeliveryId()
+        val claimAt = nextAttemptAt()
+        val claimed = deliveryQueue.claim(1, Duration.ofSeconds(10), claimAt).single()
+        assertTrue(
+            deliveryQueue.recordResult(
+                claimed,
+                DeliveryResolution.Succeeded(204),
+                claimAt.plusSeconds(1),
+            ),
+        )
+
+        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+            .andReturn()
+            .response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(409, response.status)
+        assertEquals("DELIVERY_NOT_REDELIVERABLE", body["code"].asText())
+        assertEquals("SUCCEEDED", deliveryStatus(deliveryId))
+        assertEquals(1, deliveryAttemptCount(deliveryId))
+    }
+
+    @Test
+    fun `없는 전달의 수동 재전송은 찾을 수 없음으로 응답한다`() {
+        val deliveryId = UUID.randomUUID()
+
+        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+            .andReturn()
+            .response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(404, response.status)
+        assertEquals("DELIVERY_NOT_FOUND", body["code"].asText())
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    fun `동시 수동 재전송 요청은 한 건만 대기열에 넣는다`() {
+        insertSubscription("order.created")
+        eventIntakeService.accept(eventCommand("concurrent-redelivery-event", "{\"orderId\":1}"))
+        val deliveryId = singleDeliveryId()
+        val requestedAt = nextAttemptAt().plusSeconds(1)
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = 'DEAD_LETTER', last_error = 'HTTP 503' WHERE id = ?",
+            deliveryId,
+        )
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val futures = (1..2).map {
+                executor.submit<DeliveryRedeliveryResult> {
+                    ready.countDown()
+                    start.await()
+                    deliveryRedeliveryStore.requeue(deliveryId, requestedAt)
+                }
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+
+            val results = futures.map { it.get(5, TimeUnit.SECONDS) }
+
+            assertEquals(1, results.count { it is DeliveryRedeliveryResult.Requeued })
+            assertEquals(1, results.count { it == DeliveryRedeliveryResult.NotRedeliverable(DeliveryStatus.PENDING) })
+            assertEquals("PENDING", deliveryStatus(deliveryId))
+        } finally {
+            start.countDown()
+            executor.shutdownNow()
+        }
+    }
+
     private fun insertSubscription(eventType: String): UUID {
         val subscriptionId = UUID.randomUUID()
         jdbcTemplate.update(
@@ -355,6 +468,20 @@ class PostgreSqlIntegrationTest {
             "SELECT id FROM webhook_deliveries",
             UUID::class.java,
         ),
+    )
+
+    private fun deliveryAttemptCount(deliveryId: UUID): Int = checkNotNull(
+        jdbcTemplate.queryForObject(
+            "SELECT attempt_count FROM webhook_deliveries WHERE id = ?",
+            Int::class.java,
+            deliveryId,
+        ),
+    )
+
+    private fun deliveryLastError(deliveryId: UUID): String? = jdbcTemplate.queryForObject(
+        "SELECT last_error FROM webhook_deliveries WHERE id = ?",
+        String::class.java,
+        deliveryId,
     )
 
     private fun nextAttemptAt(): Instant = checkNotNull(

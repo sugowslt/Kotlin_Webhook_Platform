@@ -1,5 +1,7 @@
 package com.sugowslt.hookrelay.common
 
+import com.sugowslt.hookrelay.delivery.DeliveryNotFoundException
+import com.sugowslt.hookrelay.delivery.DeliveryNotRedeliverableException
 import com.sugowslt.hookrelay.event.IdempotencyKeyConflictException
 import com.sugowslt.hookrelay.security.InvalidWebhookUrlException
 import jakarta.servlet.http.HttpServletRequest
@@ -12,6 +14,28 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
 
 @RestControllerAdvice
 class ApiExceptionHandler {
+    @ExceptionHandler(DeliveryNotFoundException::class)
+    fun handleDeliveryNotFound(
+        exception: DeliveryNotFoundException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> = error(
+        HttpStatus.NOT_FOUND,
+        exception.errorCode,
+        exception.message ?: "Delivery was not found",
+        request,
+    )
+
+    @ExceptionHandler(DeliveryNotRedeliverableException::class)
+    fun handleDeliveryNotRedeliverable(
+        exception: DeliveryNotRedeliverableException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> = error(
+        HttpStatus.CONFLICT,
+        exception.errorCode,
+        exception.message ?: "Delivery cannot be redelivered",
+        request,
+    )
+
     @ExceptionHandler(IdempotencyKeyConflictException::class)
     fun handleIdempotencyConflict(
         exception: IdempotencyKeyConflictException,
