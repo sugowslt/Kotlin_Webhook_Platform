@@ -49,6 +49,19 @@ class WebhookUrlPolicyTest {
     }
 
     @Test
+    fun `non public http endpoint is accepted only when explicitly enabled`() {
+        val policy = WebhookUrlPolicy(
+            allowedSchemes = setOf("https", "http"),
+            allowNonPublicTargets = true,
+            hostResolver = HostResolver { listOf(InetAddress.getByAddress(byteArrayOf(172.toByte(), 20, 0, 10))) },
+        )
+
+        val validated = policy.validate("http://webhook-receiver:8081/webhooks")
+
+        assertEquals("webhook-receiver", validated.uri.host)
+    }
+
+    @Test
     fun `private IPv4 destination is rejected`() {
         val policy = policyResolvingTo(10, 0, 0, 8)
 

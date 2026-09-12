@@ -12,6 +12,7 @@ fun interface HostResolver {
 
 class WebhookUrlPolicy(
     private val allowedSchemes: Set<String> = setOf("https"),
+    private val allowNonPublicTargets: Boolean = false,
     private val hostResolver: HostResolver = HostResolver { host -> InetAddress.getAllByName(host).toList() },
 ) {
     fun validate(rawUrl: String): ValidatedWebhookUrl {
@@ -34,13 +35,13 @@ class WebhookUrlPolicy(
             ?.let(IDN::toASCII)
             ?.lowercase()
             ?: throw InvalidWebhookUrlException("WEBHOOK_URL_HOST_REQUIRED", "Webhook URL host is required")
-        if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
+        if (!allowNonPublicTargets && (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local"))) {
             throw InvalidWebhookUrlException("WEBHOOK_URL_HOST_NOT_PUBLIC", "Webhook URL host is not public")
         }
 
         val addresses = runCatching { hostResolver.resolve(host) }
             .getOrElse { throw InvalidWebhookUrlException("WEBHOOK_URL_HOST_UNRESOLVED", "Webhook URL host cannot be resolved") }
-        if (addresses.isEmpty() || addresses.any(::isNonPublicAddress)) {
+        if (addresses.isEmpty() || (!allowNonPublicTargets && addresses.any(::isNonPublicAddress))) {
             throw InvalidWebhookUrlException("WEBHOOK_URL_HOST_NOT_PUBLIC", "Webhook URL host is not public")
         }
 

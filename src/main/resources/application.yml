@@ -19,6 +19,9 @@ management:
         include: health,info,metrics,prometheus
 
 hook-relay:
+  security:
+    allowed-schemes: https
+    allow-non-public-targets: false
   worker:
     batch-size: 20
     lease-seconds: 30
