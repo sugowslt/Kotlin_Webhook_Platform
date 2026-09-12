@@ -17,8 +17,9 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 - 전달 작업 선점 수와 결과별 처리 시간 지표
+- k6로 고정 요청률 이벤트 접수 측정
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다. 부하 측정은 남아 있습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
 2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 42개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 8개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
@@ -57,6 +58,7 @@ flowchart LR
 - Micrometer, Prometheus scrape endpoint
 - Testcontainers
 - WireMock
+- k6
 
 Prometheus 서버와 Grafana 대시보드는 Docker Compose 시연 단계에서 연결합니다.
 
@@ -106,13 +108,14 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 - [x] localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
 
-성능 수치는 고정된 부하 조건을 정한 뒤 실행 환경과 함께 기록합니다.
+2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
 
 ## 문서
 
 - [PostgreSQL 작업 큐를 먼저 사용하는 이유](docs/adr/0001-postgresql-delivery-queue.md)
 - [구현 순서와 완료 기준](docs/roadmap.md)
 - [테스트 실행 기록](docs/test-execution-log.md)
+- [이벤트 접수 부하 측정](docs/load-test.md)
 
 ## 참고 기준
 
@@ -120,4 +123,5 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 - [OWASP SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
 - [Spring Boot Metrics](https://docs.spring.io/spring-boot/reference/actuator/metrics.html)
 - [Micrometer metric naming](https://docs.micrometer.io/micrometer/reference/concepts/naming.html)
+- [k6 constant arrival rate](https://grafana.com/docs/k6/latest/using-k6/scenarios/executors/constant-arrival-rate/)
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)
