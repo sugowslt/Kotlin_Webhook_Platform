@@ -114,3 +114,21 @@
 첫 빌드는 Gradle 사용자가 `/workspace/.gradle`을 만들 수 없어 중단됐습니다. 작업 경로를 Gradle 홈 아래로 옮긴 두 번째 시도도 Docker가 새 하위 디렉터리를 root 소유로 생성해 같은 오류가 발생했습니다. 경로를 바꾸는 대신 빌드 단계에서 `/workspace` 소유권만 `gradle` 사용자에게 부여했습니다. 빌드 사용자에게 추가 권한을 주지 않으면서 캐시와 산출물을 쓸 수 있어 이 방식을 사용했습니다.
 
 이미지 빌드 후에는 Webhook 수신기가 실행 중인데도 health check의 `wget`이 `localhost:8081` 연결을 거부해 unhealthy 상태가 됐습니다. 컨테이너 안에서 `127.0.0.1:8081/health`가 정상 응답하는 것을 확인하고 health check 주소를 IPv4 loopback으로 고정했습니다. 수정 후 5개 서비스가 모두 기동됐고 구독 등록, 이벤트 접수, HMAC 헤더가 포함된 실제 로컬 전달, DB 상태, Prometheus 수집, Grafana 화면을 순서대로 확인했습니다.
+
+## 2026-09-12 수동 재전송
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2
+- 통합 테스트 명령: `gradlew.bat test --tests com.sugowslt.hookrelay.integration.PostgreSqlIntegrationTest`
+- 전체 테스트 명령: `gradlew.bat test`
+- 전체 테스트 결과: 47개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 12개 성공
+- 시연 명령: `.\demo\run-redelivery-demo.ps1`
+- 시연 결과: 첫 요청 `400/FAILED`, 수동 재전송 `202/PENDING`, 두 번째 요청 `204/SUCCEEDED`
+- DB 대조: 동일 전달 ID, 시도 횟수 2회, 이력 `FAILED,SUCCEEDED`
+- 동시성 검증: 같은 전달에 대한 동시 요청 2건 중 상태 전환 1건만 성공
+
+`FAILED`와 `DEAD_LETTER`만 조건부 `UPDATE`로 `PENDING` 전환합니다. 같은 시점에 요청이 겹쳐도 첫 요청만 상태를 바꾸고, 나머지는 현재 상태를 읽어 `409 Conflict`로 끝냅니다. 기존 전달 ID와 시도 횟수는 유지해 감사 이력의 순서를 보존했습니다.
+
+첫 컴파일에서는 새 예외의 nullable `message`를 오류 응답의 non-null 필드에 넘겨 실패했습니다. 예외 코드별 기본 메시지를 두어 응답 계약을 유지했습니다.
+
+첫 Compose 시연에서는 bind mount 파일이 바뀌었지만 실행 중인 Python 수신기 프로세스는 이전 코드를 유지해 재전송도 `404`로 끝났습니다. 시연 스크립트에서 수신기만 명시적으로 재시작하고 health check를 다시 기다리도록 수정했습니다. 다음 실행에서는 이전 시연의 고정 이벤트 유형 구독이 남아 전달 ID가 여러 개 조회됐습니다. 데이터를 지우는 대신 실행마다 고유 이벤트 유형을 만들고 단일값 조회 결과 개수를 검사하도록 바꿨습니다. 보완 후 수동 재전송 시연을 연속 두 번 실행했고 두 번 모두 `FAILED,SUCCEEDED` 이력을 확인했습니다. 기존 `run-demo.ps1` 성공 경로도 다시 실행해 정상 완료를 확인했습니다.

@@ -18,6 +18,8 @@ PostgreSQL과 Webhook 수신기의 health check가 통과해야 애플리케이�
 
 Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실행합니다.
 
+### 기본 전달
+
 ```powershell
 .\demo\run-demo.ps1
 ```
@@ -29,6 +31,21 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 3. 고유 멱등키로 `demo.created` 이벤트를 접수합니다.
 4. 해당 이벤트의 모든 전달 작업이 `SUCCEEDED`가 될 때까지 최대 30초 확인합니다.
 5. 성공 지표와 Webhook 수신 로그를 출력합니다.
+
+### 수동 재전송
+
+```powershell
+.\demo\run-redelivery-demo.ps1
+```
+
+스크립트가 수행하는 범위는 다음과 같습니다.
+
+1. 5개 서비스를 기동하고 Webhook 수신기를 최신 코드로 다시 시작합니다.
+2. 반복 실행 시 기존 구독과 섞이지 않도록 고유 이벤트 유형을 등록합니다.
+3. 수신기가 첫 요청에 `400`을 반환해 전달이 `FAILED`가 되는지 확인합니다.
+4. `POST /api/v1/deliveries/{deliveryId}/redeliveries`를 호출합니다.
+5. 같은 전달 ID의 두 번째 요청이 `204`로 끝나는지 확인합니다.
+6. 최종 상태 `SUCCEEDED`, 시도 횟수 2회, 이력 `FAILED,SUCCEEDED`를 대조합니다.
 
 정상 실행 후 아래 화면을 확인할 수 있습니다.
 
@@ -48,6 +65,8 @@ HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
 ```
 
 애플리케이션·Prometheus·Grafana 포트는 `127.0.0.1`에만 바인딩했습니다. PostgreSQL과 Webhook 수신기는 호스트에 포트를 공개하지 않습니다. Grafana 익명 접근도 로컬 시연 화면을 바로 확인하기 위한 설정입니다.
+
+수동 재전송 API는 아직 운영자 인증을 구현하지 않았습니다. 현재 구성처럼 로컬 loopback에서만 검증하고, 외부 환경에 노출하기 전에는 인증과 권한 검사를 추가해야 합니다.
 
 ## 종료와 초기화
 

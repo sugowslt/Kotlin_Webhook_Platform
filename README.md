@@ -16,13 +16,14 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - `FOR UPDATE SKIP LOCKED`와 lease token 기반 작업 선점
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
+- `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
 - 전달 작업 선점 수와 결과별 처리 시간 지표
 - k6로 고정 요청률 이벤트 접수 측정
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
 Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
-2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 43개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 8개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 47개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 12개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -36,6 +37,10 @@ flowchart LR
     Target -->|"408 · 429 · 5xx · timeout"| Retry["재시도 예약"]
     Target -->|"그 외 4xx"| Failed["영구 실패"]
     Retry --> DB
+    Retry -->|"최대 횟수 초과"| DeadLetter["Dead Letter"]
+    Failed --> Manual["수동 재전송"]
+    DeadLetter --> Manual
+    Manual --> DB
     Worker --> Metrics["전달 지표와 감사 기록"]
 ```
 
@@ -45,7 +50,8 @@ flowchart LR
 - 같은 `Idempotency-Key`로 들어온 이벤트는 한 번만 저장합니다.
 - Worker는 lease와 `FOR UPDATE SKIP LOCKED`를 사용해 전달 작업을 나눠 처리합니다.
 - timeout, `408`, `429`, `5xx`는 재시도하고 나머지 `4xx`는 영구 실패로 분류합니다.
-- 최대 시도 횟수를 넘긴 작업은 Dead Letter 상태로 옮깁니다. 수동 재전송 API는 다음 구현 범위입니다.
+- 최대 시도 횟수를 넘긴 작업은 Dead Letter 상태로 옮깁니다.
+- `FAILED`와 `DEAD_LETTER`만 수동 재전송할 수 있습니다. 기존 전달 ID·시도 횟수·이력은 유지하고 대기열에 다시 넣습니다.
 - Webhook 요청은 HMAC-SHA256으로 서명합니다.
 - 사용자가 등록한 URL을 서버가 호출하므로 SSRF 방어를 별도 경계로 둡니다.
 
@@ -83,6 +89,12 @@ Docker Desktop을 실행한 뒤 PowerShell에서 아래 명령을 사용합니�
 
 스크립트는 애플리케이션·PostgreSQL·Webhook 수신기·Prometheus·Grafana를 기동하고 구독 등록부터 실제 전달 성공까지 확인합니다. 완료 후 Grafana는 [http://127.0.0.1:3000/d/hook-relay-overview](http://127.0.0.1:3000/d/hook-relay-overview)에서 볼 수 있습니다.
 
+실패한 전달의 수동 재전송은 별도 스크립트로 확인합니다. 첫 요청을 `400`으로 실패시킨 뒤 재전송 API를 호출하고, 두 번째 요청이 `204`로 끝나는지와 시도 이력 `FAILED,SUCCEEDED`를 검사합니다.
+
+```powershell
+.\demo\run-redelivery-demo.ps1
+```
+
 ```powershell
 docker compose down
 ```
@@ -114,6 +126,14 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 
 같은 멱등키와 같은 요청을 다시 보내면 기존 이벤트 ID를 반환하고 `Idempotency-Replayed: true` 헤더를 붙입니다. 같은 키로 다른 이벤트 유형이나 본문을 보내면 `409 Conflict`로 처리합니다.
 
+실패가 확정된 전달은 전달 ID로 다시 요청할 수 있습니다. 접수된 작업은 `202 Accepted`와 `PENDING` 상태를 반환하고 Worker가 비동기로 처리합니다. 이미 대기·처리 중이거나 성공한 전달은 `409 Conflict`, 없는 전달은 `404 Not Found`로 응답합니다.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
+```
+
+현재 수동 재전송 API에는 운영자 인증이 포함되어 있지 않습니다. Compose 환경은 애플리케이션 포트를 `127.0.0.1`에만 열어 로컬에서 검증하며, 외부 환경에 배포하려면 인증·권한 경계를 먼저 추가해야 합니다.
+
 ## 검증 현황
 
 - [x] 같은 멱등키를 두 번 보내도 전달 작업이 중복 생성되지 않는가
@@ -123,6 +143,7 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 - [x] payload가 바뀌면 HMAC 검증이 실패하는가
 - [x] localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
+- [x] 실패한 전달만 수동 재전송되고 동시 요청은 한 건만 접수되는가
 
 2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
 
@@ -137,6 +158,9 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 ## 참고 기준
 
 - [GitHub Webhook 권장사항](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
+- [GitHub Webhook 재전송](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)
+- [GitHub REST Webhook delivery API](https://docs.github.com/en/rest/repos/webhooks)
+- [Stripe Webhook 재시도](https://docs.stripe.com/webhooks)
 - [OWASP SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
 - [Spring Boot Metrics](https://docs.spring.io/spring-boot/reference/actuator/metrics.html)
 - [Micrometer metric naming](https://docs.micrometer.io/micrometer/reference/concepts/naming.html)
