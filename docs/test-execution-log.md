@@ -67,3 +67,17 @@
 - 제외: 별도 프로세스나 컨테이너로 실행한 Worker, 외부 인터넷 HTTP 요청, 부하 측정
 
 먼저 두 스레드가 같은 전달 작업을 동시에 선점하도록 실행해 반환된 작업 ID가 하나뿐인지 확인했습니다. Worker 수준 테스트에서는 첫 Worker의 전달 응답을 대기시킨 상태로 두 번째 Worker를 실행했습니다. 두 번째 Worker는 처리할 작업을 가져오지 않았고 `WebhookHttpClient` 호출과 전달 시도 이력도 한 번만 기록됐습니다.
+
+## 2026-09-12 Micrometer 전달 지표
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2
+- 컨테이너: PostgreSQL 17 Alpine, Testcontainers 2.0.5
+- 최종 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 최종 결과: 42개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 8개 성공
+- 범위: Worker 선점 수, 성공·재시도·실패·Dead Letter·lease 상실·예기치 않은 오류별 처리 횟수와 소요 시간, `/actuator/prometheus` 응답
+- 제외: Prometheus 서버 수집, Grafana 대시보드, 장시간 실행과 부하 측정
+
+처리 시간은 Micrometer `Timer`로 기록해 횟수와 시간을 함께 확인하도록 구성했습니다. 결과 태그는 여섯 값으로 고정했고 전달 ID, 구독 ID, endpoint URL처럼 값이 계속 늘어날 수 있는 항목은 제외했습니다.
+
+처음 추가한 Prometheus endpoint 테스트는 `AutoConfigureMockMvc`를 찾지 못해 테스트 컴파일에 실패했습니다. Spring Boot 4에서 MVC 테스트 지원이 별도 모듈로 분리된 구성을 확인하고 `spring-boot-starter-webmvc-test`를 테스트 전용 의존성으로 추가했습니다. 운영 의존성에는 영향을 주지 않으면서 실제 HTTP endpoint를 검증할 수 있어 이 방식을 선택했습니다. 수정 후 전체 테스트 42개가 통과했습니다.

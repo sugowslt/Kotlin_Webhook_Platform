@@ -16,10 +16,11 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - `FOR UPDATE SKIP LOCKED`와 lease token 기반 작업 선점
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
+- 전달 작업 선점 수와 결과별 처리 시간 지표
 
-Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. 부하 측정은 남아 있습니다.
+Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다. 부하 측정은 남아 있습니다.
 
-2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 38개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 7개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 42개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 8개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -53,13 +54,22 @@ flowchart LR
 - PostgreSQL, Flyway
 - Spring MVC, JPA
 - Java HttpClient
-- Micrometer
+- Micrometer, Prometheus scrape endpoint
 - Testcontainers
 - WireMock
 
-Prometheus와 Grafana 연동은 다음 검증 단계에서 추가합니다.
+Prometheus 서버와 Grafana 대시보드는 Docker Compose 시연 단계에서 연결합니다.
 
 Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 선점·재시도·복구 계약을 검증한 뒤 병목이 확인될 때 도입 여부를 판단합니다.
+
+## 운영 지표
+
+- `hookrelay.delivery.claimed`: Worker가 선점한 전달 작업 수
+- `hookrelay.delivery.processing`: 결과별 처리 횟수와 소요 시간
+
+처리 결과는 `succeeded`, `retry_scheduled`, `failed`, `dead_letter`, `lease_lost`, `processing_error`로 구분합니다. 전달 ID, 구독 ID, endpoint URL처럼 계속 늘어날 수 있는 값은 태그에서 제외했습니다.
+
+지표는 `/actuator/metrics`에서 확인할 수 있고 Prometheus scrape 형식은 `/actuator/prometheus`에서 제공합니다. Prometheus 서버와 Grafana 연결은 아직 포함하지 않았습니다.
 
 ## API 예시
 
@@ -108,4 +118,6 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 
 - [GitHub Webhook 권장사항](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
 - [OWASP SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+- [Spring Boot Metrics](https://docs.spring.io/spring-boot/reference/actuator/metrics.html)
+- [Micrometer metric naming](https://docs.micrometer.io/micrometer/reference/concepts/naming.html)
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)
