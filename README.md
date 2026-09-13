@@ -36,7 +36,7 @@ flowchart LR
     API -->|"이벤트와 전달 작업 저장"| DB[("PostgreSQL")]
     DB -->|"SKIP LOCKED로 작업 선점"| Worker["Delivery Worker"]
     Worker -->|"HMAC 서명 요청"| Target["Webhook 서버"]
-    Target -->|"2xx"| Success["전달 완료"]
+    Target -->|"2xx"| Success["전송 완료"]
     Target -->|"408 · 429 · 5xx · timeout"| Retry["재시도 예약"]
     Target -->|"그 외 4xx"| Failed["전송 실패"]
     Retry --> DB
