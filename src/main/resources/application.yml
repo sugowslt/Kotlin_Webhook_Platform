@@ -22,6 +22,7 @@ hook-relay:
   security:
     allowed-schemes: https
     allow-non-public-targets: false
+    operator-token: ${HOOK_RELAY_OPERATOR_TOKEN:}
   worker:
     batch-size: 20
     lease-seconds: 30

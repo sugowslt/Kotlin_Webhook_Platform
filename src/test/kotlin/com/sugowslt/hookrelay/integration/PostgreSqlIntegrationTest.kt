@@ -1,6 +1,7 @@
 package com.sugowslt.hookrelay.integration
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.sugowslt.hookrelay.common.TraceIdFilter
 import com.sugowslt.hookrelay.delivery.ClaimedDelivery
 import com.sugowslt.hookrelay.delivery.DeliveryMetrics
 import com.sugowslt.hookrelay.delivery.DeliveryMetricOutcome
@@ -29,6 +30,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
+import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
@@ -61,6 +63,7 @@ import kotlin.test.assertTrue
 @SpringBootTest(
     properties = [
         "hook-relay.worker.poll-interval-millis=3600000",
+        "hook-relay.security.operator-token=test-operator-token-that-is-not-secret",
     ],
 )
 class PostgreSqlIntegrationTest {
@@ -136,6 +139,43 @@ class PostgreSqlIntegrationTest {
         assertEquals(200, response.status)
         assertTrue(body.contains("hookrelay_delivery_claimed_total"))
         assertTrue(body.contains("hookrelay_delivery_processing_seconds_count{outcome=\"succeeded\"}"))
+    }
+
+    @Test
+    fun `운영자 토큰이 없으면 수동 재전송을 거부한다`() {
+        val deliveryId = UUID.randomUUID()
+        val traceId = "0123456789abcdef0123456789abcdef"
+
+        val response = mockMvc.perform(
+            post("/api/v1/deliveries/$deliveryId/redeliveries")
+                .header(TraceIdFilter.TRACE_ID_HEADER, traceId),
+        )
+            .andReturn()
+            .response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(401, response.status)
+        assertEquals("Bearer realm=\"hook-relay\"", response.getHeader(HttpHeaders.WWW_AUTHENTICATE))
+        assertEquals(traceId, response.getHeader(TraceIdFilter.TRACE_ID_HEADER))
+        assertEquals("OPERATOR_AUTHENTICATION_REQUIRED", body["code"].asText())
+        assertEquals("/api/v1/deliveries/$deliveryId/redeliveries", body["path"].asText())
+        assertEquals(traceId, body["traceId"].asText())
+    }
+
+    @Test
+    fun `잘못된 운영자 토큰이면 수동 재전송을 거부한다`() {
+        val deliveryId = UUID.randomUUID()
+
+        val response = mockMvc.perform(
+            post("/api/v1/deliveries/$deliveryId/redeliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer wrong-operator-token-that-is-invalid"),
+        )
+            .andReturn()
+            .response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(401, response.status)
+        assertEquals("OPERATOR_AUTHENTICATION_REQUIRED", body["code"].asText())
     }
 
     @Test
@@ -329,7 +369,10 @@ class PostgreSqlIntegrationTest {
             ),
         )
 
-        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+        val response = mockMvc.perform(
+            post("/api/v1/deliveries/$deliveryId/redeliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN"),
+        )
             .andReturn()
             .response
         val body = objectMapper.readTree(response.contentAsString)
@@ -359,7 +402,10 @@ class PostgreSqlIntegrationTest {
             ),
         )
 
-        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+        val response = mockMvc.perform(
+            post("/api/v1/deliveries/$deliveryId/redeliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN"),
+        )
             .andReturn()
             .response
         val body = objectMapper.readTree(response.contentAsString)
@@ -374,7 +420,10 @@ class PostgreSqlIntegrationTest {
     fun `없는 전달의 수동 재전송은 찾을 수 없음으로 응답한다`() {
         val deliveryId = UUID.randomUUID()
 
-        val response = mockMvc.perform(post("/api/v1/deliveries/$deliveryId/redeliveries"))
+        val response = mockMvc.perform(
+            post("/api/v1/deliveries/$deliveryId/redeliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN"),
+        )
             .andReturn()
             .response
         val body = objectMapper.readTree(response.contentAsString)
@@ -510,6 +559,7 @@ class PostgreSqlIntegrationTest {
         )
 
     companion object {
+        private const val OPERATOR_TOKEN = "test-operator-token-that-is-not-secret"
         private val ALLOWED_TABLES = setOf(
             "webhook_subscriptions",
             "webhook_events",
