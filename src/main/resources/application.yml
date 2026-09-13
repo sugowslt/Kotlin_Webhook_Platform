@@ -11,6 +11,10 @@ spring:
     open-in-view: false
   flyway:
     enabled: true
+  task:
+    scheduling:
+      pool:
+        size: 2
 
 management:
   endpoints:
