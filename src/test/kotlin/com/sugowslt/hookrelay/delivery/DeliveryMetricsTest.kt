@@ -52,4 +52,51 @@ class DeliveryMetricsTest {
                 .toSet(),
         )
     }
+
+    @Test
+    fun `작업 선점 시간과 결과를 기록한다`() {
+        DeliveryClaimMetricOutcome.entries.forEach { outcome ->
+            val sample = metrics.startClaim()
+            clock.add(Duration.ofMillis(5))
+            metrics.recordClaim(sample, outcome)
+        }
+
+        DeliveryClaimMetricOutcome.entries.forEach { outcome ->
+            val timer = registry.get(DeliveryMetrics.CLAIM_METRIC)
+                .tag(DeliveryMetrics.OUTCOME_TAG, outcome.tagValue)
+                .timer()
+
+            assertEquals(1L, timer.count())
+            assertEquals(5.0, timer.totalTime(TimeUnit.MILLISECONDS), 0.001)
+        }
+    }
+
+    @Test
+    fun `현재 작업 대기열 수를 고정된 상태로 기록한다`() {
+        metrics.recordQueueSnapshot(
+            DeliveryQueueSnapshot(
+                claimable = 3,
+                scheduled = 2,
+                leased = 1,
+                stalled = 0,
+            ),
+        )
+
+        assertEquals(3.0, queueDepth("claimable"))
+        assertEquals(2.0, queueDepth("scheduled"))
+        assertEquals(1.0, queueDepth("leased"))
+        assertEquals(0.0, queueDepth("stalled"))
+        assertEquals(
+            DeliveryQueueMetricState.entries.map(DeliveryQueueMetricState::tagValue).toSet(),
+            registry.meters
+                .filter { it.id.name == DeliveryMetrics.QUEUE_DEPTH_METRIC }
+                .mapNotNull { it.id.getTag(DeliveryMetrics.STATE_TAG) }
+                .toSet(),
+        )
+    }
+
+    private fun queueDepth(state: String): Double = registry.get(DeliveryMetrics.QUEUE_DEPTH_METRIC)
+        .tag(DeliveryMetrics.STATE_TAG, state)
+        .gauge()
+        .value()
 }

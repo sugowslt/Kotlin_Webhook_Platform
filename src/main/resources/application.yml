@@ -19,6 +19,8 @@ management:
         include: health,info,metrics,prometheus
 
 hook-relay:
+  metrics:
+    queue-snapshot-interval-millis: 5000
   security:
     allowed-schemes: https
     allow-non-public-targets: false

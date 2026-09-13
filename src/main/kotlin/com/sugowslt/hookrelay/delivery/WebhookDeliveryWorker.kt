@@ -35,11 +35,18 @@ class WebhookDeliveryWorker(
 
     @Scheduled(fixedDelayString = "\${hook-relay.worker.poll-interval-millis:1000}")
     fun processBatch(): Int {
-        val claimed = deliveryQueue.claim(
-            batchSize = batchSize,
-            leaseDuration = Duration.ofSeconds(leaseSeconds),
-            now = Instant.now(clock),
-        )
+        val claimSample = deliveryMetrics.startClaim()
+        val claimed = try {
+            deliveryQueue.claim(
+                batchSize = batchSize,
+                leaseDuration = Duration.ofSeconds(leaseSeconds),
+                now = Instant.now(clock),
+            )
+        } catch (exception: RuntimeException) {
+            deliveryMetrics.recordClaim(claimSample, DeliveryClaimMetricOutcome.FAILED)
+            throw exception
+        }
+        deliveryMetrics.recordClaim(claimSample, DeliveryClaimMetricOutcome.SUCCEEDED)
         deliveryMetrics.recordClaimed(claimed.size)
         claimed.forEach { delivery ->
             val sample = deliveryMetrics.startProcessing()

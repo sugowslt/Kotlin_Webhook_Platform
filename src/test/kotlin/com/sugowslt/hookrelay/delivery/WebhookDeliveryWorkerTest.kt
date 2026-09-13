@@ -13,6 +13,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 class WebhookDeliveryWorkerTest {
@@ -39,6 +40,7 @@ class WebhookDeliveryWorkerTest {
         val resolution = assertIs<DeliveryResolution.Succeeded>(queue.resolution)
         assertEquals(204, resolution.statusCode)
         assertEquals(1.0, claimedCount())
+        assertEquals(1L, claimCount("succeeded"))
         assertEquals(1L, processingCount("succeeded"))
         assertEquals(
             signatureService.sign(
@@ -146,6 +148,30 @@ class WebhookDeliveryWorkerTest {
         assertEquals(1L, processingCount("lease_lost"))
     }
 
+    @Test
+    fun `작업 선점 실패도 지표로 기록하고 예외를 전달한다`() {
+        val queue = object : DeliveryQueue {
+            override fun claim(batchSize: Int, leaseDuration: Duration, now: Instant): List<ClaimedDelivery> {
+                throw IllegalStateException("claim failed")
+            }
+
+            override fun recordResult(
+                delivery: ClaimedDelivery,
+                resolution: DeliveryResolution,
+                finishedAt: Instant,
+            ): Boolean = error("recordResult must not be called")
+        }
+        val worker = worker(queue) {
+            error("HTTP client must not be called")
+        }
+
+        assertFailsWith<IllegalStateException> {
+            worker.processBatch()
+        }
+        assertEquals(1L, claimCount("failed"))
+        assertEquals(0L, claimCount("succeeded"))
+    }
+
     private fun worker(
         queue: DeliveryQueue,
         httpClient: WebhookHttpClient,
@@ -168,6 +194,12 @@ class WebhookDeliveryWorkerTest {
     private fun claimedCount(): Double = meterRegistry
         .get(DeliveryMetrics.CLAIMED_METRIC)
         .counter()
+        .count()
+
+    private fun claimCount(outcome: String): Long = meterRegistry
+        .get(DeliveryMetrics.CLAIM_METRIC)
+        .tag(DeliveryMetrics.OUTCOME_TAG, outcome)
+        .timer()
         .count()
 
     private fun processingCount(outcome: String): Long = meterRegistry

@@ -6,6 +6,8 @@ import com.sugowslt.hookrelay.delivery.ClaimedDelivery
 import com.sugowslt.hookrelay.delivery.DeliveryMetrics
 import com.sugowslt.hookrelay.delivery.DeliveryMetricOutcome
 import com.sugowslt.hookrelay.delivery.DeliveryQueue
+import com.sugowslt.hookrelay.delivery.DeliveryQueueSnapshot
+import com.sugowslt.hookrelay.delivery.DeliveryQueueSnapshotStore
 import com.sugowslt.hookrelay.delivery.DeliveryRedeliveryResult
 import com.sugowslt.hookrelay.delivery.DeliveryRedeliveryStore
 import com.sugowslt.hookrelay.delivery.DeliveryResolution
@@ -63,6 +65,7 @@ import kotlin.test.assertTrue
 @SpringBootTest(
     properties = [
         "hook-relay.worker.poll-interval-millis=3600000",
+        "hook-relay.metrics.queue-snapshot-interval-millis=3600000",
         "hook-relay.security.operator-token=test-operator-token-that-is-not-secret",
     ],
 )
@@ -84,6 +87,9 @@ class PostgreSqlIntegrationTest {
 
     @Autowired
     private lateinit var deliveryQueue: DeliveryQueue
+
+    @Autowired
+    private lateinit var deliveryQueueSnapshotStore: DeliveryQueueSnapshotStore
 
     @Autowired
     private lateinit var deliveryRedeliveryStore: DeliveryRedeliveryStore
@@ -138,7 +144,55 @@ class PostgreSqlIntegrationTest {
 
         assertEquals(200, response.status)
         assertTrue(body.contains("hookrelay_delivery_claimed_total"))
+        assertTrue(body.contains("hookrelay_delivery_claim_seconds_count{outcome=\"succeeded\"}"))
+        assertTrue(body.contains("hookrelay_delivery_queue_depth{state=\"claimable\"}"))
         assertTrue(body.contains("hookrelay_delivery_processing_seconds_count{outcome=\"succeeded\"}"))
+    }
+
+    @Test
+    fun `작업 대기열 상태를 선점 가능 시각과 lease 기준으로 집계한다`() {
+        insertSubscription("order.created")
+        repeat(4) { index ->
+            eventIntakeService.accept(eventCommand("queue-snapshot-$index", "{\"orderId\":$index}"))
+        }
+        val deliveryIds = jdbcTemplate.queryForList(
+            "SELECT id FROM webhook_deliveries ORDER BY id",
+            UUID::class.java,
+        )
+        val snapshotAt = Instant.parse("2026-09-13T00:00:00Z")
+
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = 'PENDING', next_attempt_at = ? WHERE id = ?",
+            Timestamp.from(snapshotAt.minusSeconds(1)),
+            deliveryIds[0],
+        )
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = 'RETRY_WAIT', next_attempt_at = ? WHERE id = ?",
+            Timestamp.from(snapshotAt.plusSeconds(30)),
+            deliveryIds[1],
+        )
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = 'PROCESSING', lease_until = ?, lease_token = ? WHERE id = ?",
+            Timestamp.from(snapshotAt.plusSeconds(30)),
+            UUID.randomUUID(),
+            deliveryIds[2],
+        )
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = 'PROCESSING', lease_until = ?, lease_token = ? WHERE id = ?",
+            Timestamp.from(snapshotAt.minusSeconds(1)),
+            UUID.randomUUID(),
+            deliveryIds[3],
+        )
+
+        assertEquals(
+            DeliveryQueueSnapshot(
+                claimable = 2,
+                scheduled = 1,
+                leased = 1,
+                stalled = 0,
+            ),
+            deliveryQueueSnapshotStore.load(snapshotAt),
+        )
     }
 
     @Test
