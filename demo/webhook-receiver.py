@@ -1,7 +1,13 @@
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from time import sleep
+
+
+DELAY_MILLISECONDS = int(os.environ.get("WEBHOOK_DELAY_MILLIS", "250"))
+if DELAY_MILLISECONDS < 0:
+    raise ValueError("WEBHOOK_DELAY_MILLIS must not be negative")
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
@@ -20,7 +26,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(b'{"status":"UP"}')
 
     def do_POST(self):
-        if self.path not in ("/webhooks", "/webhooks/fail-once", "/webhooks/hold-once"):
+        if self.path not in (
+            "/webhooks",
+            "/webhooks/delay",
+            "/webhooks/fail-once",
+            "/webhooks/hold-once",
+        ):
             self.send_error(404)
             return
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -35,6 +46,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         status_code = 204
         should_hold = False
+        should_delay = self.path == "/webhooks/delay"
         if self.path == "/webhooks/fail-once":
             request_key = str(parsed_payload.get("orderId", record["deliveryId"]))
             with self.failed_once_lock:
@@ -49,9 +61,13 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     should_hold = True
 
         record["responseStatus"] = "HELD" if should_hold else status_code
+        if should_delay:
+            record["delayMillis"] = DELAY_MILLISECONDS
         print(json.dumps(record, ensure_ascii=False), flush=True)
         if should_hold:
             sleep(60)
+        elif should_delay:
+            sleep(DELAY_MILLISECONDS / 1000)
         try:
             self.send_response(status_code)
             self.end_headers()

@@ -20,6 +20,7 @@ services:
     image: python:3.13-alpine
     environment:
       PYTHONUNBUFFERED: "1"
+      WEBHOOK_DELAY_MILLIS: "250"
     command: ["python", "/demo/webhook-receiver.py"]
     volumes:
       - ./demo/webhook-receiver.py:/demo/webhook-receiver.py:ro
