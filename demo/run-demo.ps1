@@ -60,6 +60,12 @@ try {
     if ($metrics.Content -notmatch '(?m)^hookrelay_delivery_processing_seconds_count\{[^}]*outcome="succeeded"[^}]*\}') {
         throw "Succeeded delivery metric was not exposed"
     }
+    if ($metrics.Content -notmatch '(?m)^hookrelay_delivery_claim_seconds_count\{[^}]*outcome="succeeded"[^}]*\}') {
+        throw "Delivery claim metric was not exposed"
+    }
+    if ($metrics.Content -notmatch '(?m)^hookrelay_delivery_queue_depth\{[^}]*state="claimable"[^}]*\}') {
+        throw "Delivery queue depth metric was not exposed"
+    }
 
     Write-Host ""
     Write-Host "Demo delivery completed"
