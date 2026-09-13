@@ -43,7 +43,7 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 1. 5개 서비스를 기동하고 Webhook 수신기를 최신 코드로 다시 시작합니다.
 2. 반복 실행 시 기존 구독과 섞이지 않도록 고유 이벤트 유형을 등록합니다.
 3. 수신기가 첫 요청에 `400`을 반환해 전달이 `FAILED`가 되는지 확인합니다.
-4. `POST /api/v1/deliveries/{deliveryId}/redeliveries`를 호출합니다.
+4. 운영자 Bearer 토큰으로 `POST /api/v1/deliveries/{deliveryId}/redeliveries`를 호출합니다.
 5. 같은 전달 ID의 두 번째 요청이 `204`로 끝나는지 확인합니다.
 6. 최종 상태 `SUCCEEDED`, 시도 횟수 2회, 이력 `FAILED,SUCCEEDED`를 대조합니다.
 
@@ -80,11 +80,18 @@ Grafana 대시보드는 애플리케이션 상태, 선점한 전달 수, 성공�
 ```yaml
 HOOK_RELAY_SECURITY_ALLOWED_SCHEMES: http,https
 HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
+HOOK_RELAY_OPERATOR_TOKEN: ${HOOK_RELAY_OPERATOR_TOKEN:-local-demo-operator-token-not-secret}
 ```
 
 애플리케이션·Prometheus·Grafana 포트는 `127.0.0.1`에만 바인딩했습니다. PostgreSQL과 Webhook 수신기는 호스트에 포트를 공개하지 않습니다. Grafana 익명 접근도 로컬 시연 화면을 바로 확인하기 위한 설정입니다.
 
-수동 재전송 API는 아직 운영자 인증을 구현하지 않았습니다. 현재 구성처럼 로컬 loopback에서만 검증하고, 외부 환경에 노출하기 전에는 인증과 권한 검사를 추가해야 합니다.
+`local-demo-operator-token-not-secret`은 시연 스크립트와 Compose를 바로 연결하기 위한 공개값입니다. 운영 환경에서는 재사용하지 않습니다. 다른 토큰으로 시연하려면 32자 이상의 값을 Compose 환경변수에 넣고 스크립트에도 같은 값을 전달합니다.
+
+```powershell
+.\demo\run-redelivery-demo.ps1 -OperatorToken "local-test-operator-token-replace-me"
+```
+
+수동 재전송 API는 Bearer 토큰이 일치하는 요청에만 `OPERATOR` 권한을 부여합니다. 누락하거나 잘못 보낸 토큰은 같은 `401 Unauthorized` 응답으로 처리하며 인증 상태를 세션에 저장하지 않습니다. 외부 환경에서는 이 인증과 함께 TLS와 네트워크 접근 제한을 적용해야 합니다.
 
 ## 종료와 초기화
 

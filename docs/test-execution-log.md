@@ -148,3 +148,20 @@
 강제 종료 복구 시연은 연속 두 번 실행했습니다. 두 실행 모두 재선점 시각이 기존 lease 만료 시각보다 빠르지 않았고 최종 상태가 `SUCCEEDED|1|SUCCEEDED`로 끝났습니다. 수신기에는 같은 전달 ID가 두 번 남아 at-least-once 동작도 확인했습니다.
 
 수신기 변경 후 `.\demo\run-redelivery-demo.ps1`과 `.\demo\run-demo.ps1`도 다시 실행했습니다. 수동 재전송은 `FAILED,SUCCEEDED`, 기본 전달은 모든 작업이 `SUCCEEDED`로 끝났습니다. 시연 중 PostgreSQL과 Docker volume은 삭제하지 않았습니다.
+
+## 2026-09-13 수동 재전송 운영자 인증
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2, Docker Compose 5.5.1
+- 전체 테스트 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 전체 테스트 결과: 52개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 14개 성공
+- 토큰 검증 단위 테스트: 3개 성공
+- 시연 명령: `.\demo\run-redelivery-demo.ps1`
+- 시연 결과: 인증된 재전송 `202/PENDING`, 최종 상태 `SUCCEEDED`, 이력 `FAILED,SUCCEEDED`
+- 인증 응답: 토큰 누락 `401`, 잘못된 토큰 `401`, 정상 토큰으로 없는 전달 요청 `404`
+- 로그 검사: 로컬 시연용 운영자 토큰 문자열 노출 0건
+- 제외: 운영자별 계정, 무중단 토큰 교체, 외부 OIDC, TLS 종단
+
+수동 재전송 경로에만 Spring Security 요청 권한 검사를 적용했습니다. `Authorization: Bearer` 토큰이 일치하면 `OPERATOR` 권한을 부여하고, 인증 상태는 HTTP 세션에 저장하지 않습니다. 토큰은 SHA-256 digest로 바꾼 뒤 상수 시간 비교를 사용합니다.
+
+누락과 불일치 응답을 같은 오류 코드로 맞춰 인증 실패 원인을 외부에 구분해 주지 않았습니다. 정상 토큰으로 존재하지 않는 전달을 요청했을 때는 기존 `404 DELIVERY_NOT_FOUND`가 반환되어 인증 이후 Controller의 오류 계약도 유지됐습니다. 재전송 시연 과정에서 구독 등록과 이벤트 접수도 각각 `201`, `202`로 처리되어 공개 API의 기존 동작을 함께 확인했습니다.

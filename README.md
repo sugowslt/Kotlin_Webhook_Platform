@@ -18,13 +18,14 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 - `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
+- Bearer 토큰과 `OPERATOR` 권한을 사용한 수동 재전송 보호
 - 전달 작업 선점 수와 결과별 처리 시간 지표
 - k6로 고정 요청률 이벤트 접수 측정
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
 Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. Compose에서는 HTTP 응답 대기 중 Worker를 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 복구하는 과정을 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
-2026-09-12 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 47개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 12개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-13 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 52개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 14개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -53,6 +54,7 @@ flowchart LR
 - timeout, `408`, `429`, `5xx`는 재시도하고 나머지 `4xx`는 영구 실패로 분류합니다.
 - 최대 시도 횟수를 넘긴 작업은 Dead Letter 상태로 옮깁니다.
 - `FAILED`와 `DEAD_LETTER`만 수동 재전송할 수 있습니다. 기존 전달 ID·시도 횟수·이력은 유지하고 대기열에 다시 넣습니다.
+- 수동 재전송은 32자 이상의 운영자 Bearer 토큰이 있어야 요청할 수 있습니다.
 - 전달 보장은 at-least-once입니다. 외부 서버가 요청을 처리한 직후 Worker가 종료되면 같은 전달 ID가 다시 전송될 수 있습니다.
 - Webhook 요청은 HMAC-SHA256으로 서명합니다.
 - 사용자가 등록한 URL을 서버가 호출하므로 SSRF 방어를 별도 경계로 둡니다.
@@ -62,7 +64,7 @@ flowchart LR
 - Kotlin 2.2.21, Java 17
 - Spring Boot 4.0.3, Gradle
 - PostgreSQL, Flyway
-- Spring MVC, JPA
+- Spring MVC, Spring Security, JPA
 - Java HttpClient
 - Micrometer, Prometheus scrape endpoint
 - Docker Compose, Prometheus, Grafana
@@ -96,6 +98,8 @@ Docker Desktop을 실행한 뒤 PowerShell에서 아래 명령을 사용합니�
 ```powershell
 .\demo\run-redelivery-demo.ps1
 ```
+
+스크립트의 기본 운영자 토큰은 Compose 전용 공개 시연값입니다. 다른 값을 시험하려면 Compose의 `HOOK_RELAY_OPERATOR_TOKEN`과 스크립트의 `-OperatorToken` 인자를 같은 32자 이상 값으로 바꿉니다.
 
 Worker 강제 종료 후 복구는 아래 스크립트로 확인합니다. 첫 요청을 수신기가 보류한 상태에서 애플리케이션만 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 다시 보내는지 검사합니다.
 
@@ -137,10 +141,11 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 실패가 확정된 전달은 전달 ID로 다시 요청할 수 있습니다. 접수된 작업은 `202 Accepted`와 `PENDING` 상태를 반환하고 Worker가 비동기로 처리합니다. 이미 대기·처리 중이거나 성공한 전달은 `409 Conflict`, 없는 전달은 `404 Not Found`로 응답합니다.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
+curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
+  -H "Authorization: Bearer $HOOK_RELAY_OPERATOR_TOKEN"
 ```
 
-현재 수동 재전송 API에는 운영자 인증이 포함되어 있지 않습니다. Compose 환경은 애플리케이션 포트를 `127.0.0.1`에만 열어 로컬에서 검증하며, 외부 환경에 배포하려면 인증·권한 경계를 먼저 추가해야 합니다.
+토큰 누락, 잘못된 형식, 불일치는 모두 `401 Unauthorized`로 응답합니다. 기본 설정에는 토큰값이 없으며 `HOOK_RELAY_OPERATOR_TOKEN`이 32자보다 짧으면 애플리케이션이 시작되지 않습니다. Compose에 적힌 `local-demo-operator-token-not-secret`은 loopback 시연 전용이므로 다른 환경에서 사용하지 않습니다.
 
 ## 검증 현황
 
@@ -152,6 +157,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 - [x] localhost와 사설 주소가 Webhook 대상으로 등록되지 않는가
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
 - [x] 실패한 전달만 수동 재전송되고 동시 요청은 한 건만 접수되는가
+- [x] 운영자 토큰이 없거나 일치하지 않으면 수동 재전송이 거부되는가
 
 2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
 
@@ -159,6 +165,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 
 - [PostgreSQL 작업 큐를 먼저 사용하는 이유](docs/adr/0001-postgresql-delivery-queue.md)
 - [Webhook 전달을 at-least-once로 복구하는 이유](docs/adr/0002-at-least-once-delivery.md)
+- [수동 재전송 API를 운영자 Bearer 토큰으로 보호하는 이유](docs/adr/0003-operator-bearer-token.md)
 - [구현 순서와 완료 기준](docs/roadmap.md)
 - [테스트 실행 기록](docs/test-execution-log.md)
 - [이벤트 접수 부하 측정](docs/load-test.md)
@@ -179,3 +186,5 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries
 - [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/17/sql-select.html)
 - [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)
+- [Spring Security 요청 권한 설정](https://docs.spring.io/spring-security/reference/servlet/authorization/authorize-http-requests.html)
+- [Spring Security Stateless 인증](https://docs.spring.io/spring-security/reference/servlet/authentication/session-management.html)
