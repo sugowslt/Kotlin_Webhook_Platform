@@ -165,3 +165,19 @@
 수동 재전송 경로에만 Spring Security 요청 권한 검사를 적용했습니다. `Authorization: Bearer` 토큰이 일치하면 `OPERATOR` 권한을 부여하고, 인증 상태는 HTTP 세션에 저장하지 않습니다. 토큰은 SHA-256 digest로 바꾼 뒤 상수 시간 비교를 사용합니다.
 
 누락과 불일치 응답을 같은 오류 코드로 맞춰 인증 실패 원인을 외부에 구분해 주지 않았습니다. 정상 토큰으로 존재하지 않는 전달을 요청했을 때는 기존 `404 DELIVERY_NOT_FOUND`가 반환되어 인증 이후 Controller의 오류 계약도 유지됐습니다. 재전송 시연 과정에서 구독 등록과 이벤트 접수도 각각 `201`, `202`로 처리되어 공개 API의 기존 동작을 함께 확인했습니다.
+
+## 2026-09-13 작업 대기열 관측
+
+- 환경: Windows, Java 17.0.18, Gradle Wrapper 9.3.1, Docker 29.7.2, Docker Compose 5.5.1
+- 전체 테스트 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 전체 테스트 결과: 56개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 15개 성공
+- 시연 명령: `.\demo\run-demo.ps1`
+- 전달 결과: 전달 작업 4개 모두 `SUCCEEDED`
+- Prometheus 확인: 작업 대기열 상태 시계열 4개, 선점률 집계 시계열 1개
+- Grafana 확인: dashboard version 2, 패널 8개
+- 제외: 경보 임계값, 장시간 추이, 다중 인스턴스 부하, 운영 환경 DB 비용
+
+작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled`로 집계합니다. `claimable`은 `PENDING`·`RETRY_WAIT` 중 실행 시각이 지난 작업과 lease가 만료된 `PROCESSING` 작업입니다. 미래에 실행할 작업은 `scheduled`, 유효한 lease가 있으면 `leased`, `PROCESSING`인데 lease가 없으면 `stalled`로 분류했습니다. PostgreSQL 통합 테스트에서는 네 상태를 각각 만든 뒤 `2, 1, 1, 0`으로 집계되는지 확인했습니다.
+
+Prometheus가 `/actuator/prometheus`를 호출할 때마다 DB 쿼리가 실행되지 않도록 별도 sampler가 5초마다 상태를 읽어 메모리 Gauge를 갱신합니다. 같은 DB를 보는 애플리케이션이 여러 개면 전역 작업 수가 인스턴스마다 반복되므로 Grafana에서는 `sum` 대신 상태별 `max`를 사용했습니다. 선점 SQL은 성공과 실패를 고정된 outcome 태그로 나눠 Timer에 기록합니다.

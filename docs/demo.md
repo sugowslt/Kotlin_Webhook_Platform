@@ -71,7 +71,9 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 - Prometheus: [Targets](http://127.0.0.1:9090/targets)
 - 애플리케이션: [Health](http://127.0.0.1:8080/actuator/health)
 
-Grafana 대시보드는 애플리케이션 상태, 선점한 전달 수, 성공·Dead Letter 건수, 결과별 처리율과 평균 처리 시간을 보여줍니다. 데이터 소스와 대시보드는 파일로 provisioning하므로 별도 설정이나 로그인은 필요하지 않습니다.
+Grafana 대시보드는 애플리케이션 상태, 선점한 전달 수, 작업 대기열 상태, 선점 SQL 평균 실행 시간, 성공·Dead Letter 건수, 결과별 처리율과 평균 처리 시간을 보여줍니다. 모두 8개 패널이며 데이터 소스와 대시보드는 파일로 provisioning하므로 별도 설정이나 로그인은 필요하지 않습니다.
+
+작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled`로 구분합니다. 여러 애플리케이션 인스턴스가 같은 PostgreSQL 작업 수를 각각 노출해도 합산되지 않도록 Grafana 쿼리는 상태별 최댓값을 사용합니다.
 
 ## 보안 경계
 

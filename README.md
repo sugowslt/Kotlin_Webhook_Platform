@@ -19,13 +19,14 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - `Retry-After`와 지수 backoff를 반영한 재시도
 - `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
 - Bearer 토큰과 `OPERATOR` 권한을 사용한 수동 재전송 보호
+- 선점 가능·예약·처리·정체 작업 수와 선점 SQL 실행 시간 지표
 - 전달 작업 선점 수와 결과별 처리 시간 지표
 - k6로 고정 요청률 이벤트 접수 측정
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
 Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. Compose에서는 HTTP 응답 대기 중 Worker를 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 복구하는 과정을 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
-2026-09-13 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 52개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 14개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-13 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 56개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 15개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -77,11 +78,15 @@ Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 
 ## 운영 지표
 
 - `hookrelay.delivery.claimed`: Worker가 선점한 전달 작업 수
+- `hookrelay.delivery.claim`: 선점 SQL 실행 횟수와 소요 시간
+- `hookrelay.delivery.queue.depth`: 현재 작업 대기열 수
 - `hookrelay.delivery.processing`: 결과별 처리 횟수와 소요 시간
 
-처리 결과는 `succeeded`, `retry_scheduled`, `failed`, `dead_letter`, `lease_lost`, `processing_error`로 구분합니다. 전달 ID, 구독 ID, endpoint URL처럼 계속 늘어날 수 있는 값은 태그에서 제외했습니다.
+작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled` 네 상태로 나눕니다. `claimable`에는 바로 선점할 수 있는 작업과 lease가 만료된 작업이 포함됩니다. `stalled`는 `PROCESSING` 상태인데 lease가 없는 비정상 작업입니다. 5초마다 PostgreSQL을 한 번 조회해 Gauge를 갱신하므로 Prometheus scrape 요청이 DB 쿼리를 직접 실행하지 않습니다.
 
-지표는 `/actuator/metrics`에서 확인할 수 있고 Prometheus scrape 형식은 `/actuator/prometheus`에서 제공합니다. 로컬 Docker Compose 환경에서는 Prometheus가 5초마다 수집하며 Grafana의 `Hook Relay Overview` 대시보드에서 상태와 전달 결과를 확인할 수 있습니다.
+여러 애플리케이션 인스턴스가 같은 DB를 보면 각 인스턴스가 전역 작업 수를 동일하게 노출할 수 있습니다. Grafana의 작업 대기열 그래프는 인스턴스별 값을 더하지 않고 상태별 최댓값을 사용합니다. 처리 결과는 `succeeded`, `retry_scheduled`, `failed`, `dead_letter`, `lease_lost`, `processing_error`로 구분하며 전달 ID, 구독 ID, endpoint URL처럼 계속 늘어날 수 있는 값은 태그에서 제외했습니다.
+
+지표는 `/actuator/metrics`에서 확인할 수 있고 Prometheus scrape 형식은 `/actuator/prometheus`에서 제공합니다. 로컬 Docker Compose 환경에서는 Prometheus가 5초마다 수집하며 Grafana의 `Hook Relay Overview` 대시보드에서 작업 대기열, 선점 시간, 전달 결과를 확인할 수 있습니다.
 
 ## 로컬 시연
 
@@ -158,6 +163,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
 - [x] 실패한 전달만 수동 재전송되고 동시 요청은 한 건만 접수되는가
 - [x] 운영자 토큰이 없거나 일치하지 않으면 수동 재전송이 거부되는가
+- [x] 작업 대기열 상태와 선점 SQL 실행 시간이 Prometheus에 노출되는가
 
 2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
 
@@ -188,3 +194,5 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)
 - [Spring Security 요청 권한 설정](https://docs.spring.io/spring-security/reference/servlet/authorization/authorize-http-requests.html)
 - [Spring Security Stateless 인증](https://docs.spring.io/spring-security/reference/servlet/authentication/session-management.html)
+- [Micrometer Gauge](https://docs.micrometer.io/micrometer/reference/concepts/gauges.html)
+- [Micrometer Timer](https://docs.micrometer.io/micrometer/reference/concepts/timers.html)
