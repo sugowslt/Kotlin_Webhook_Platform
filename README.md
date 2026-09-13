@@ -38,7 +38,7 @@ flowchart LR
     Worker -->|"HMAC 서명 요청"| Target["Webhook 서버"]
     Target -->|"2xx"| Success["전달 완료"]
     Target -->|"408 · 429 · 5xx · timeout"| Retry["재시도 예약"]
-    Target -->|"그 외 4xx"| Failed["영구 실패"]
+    Target -->|"그 외 4xx"| Failed["전송 실패"]
     Retry --> DB
     Retry -->|"최대 횟수 초과"| DeadLetter["Dead Letter"]
     Failed --> Manual["수동 재전송"]
