@@ -1,9 +1,15 @@
 param(
-    [string]$BaseUrl = "http://127.0.0.1:8080"
+    [string]$BaseUrl = "http://127.0.0.1:8080",
+    [string]$OperatorToken = "local-demo-operator-token-not-secret"
 )
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+if ($OperatorToken.Length -lt 32) {
+    throw "Operator token must contain at least 32 characters"
+}
+$previousOperatorToken = $env:HOOK_RELAY_OPERATOR_TOKEN
+$env:HOOK_RELAY_OPERATOR_TOKEN = $OperatorToken
 
 function Invoke-DatabaseScalar {
     param(
@@ -91,7 +97,8 @@ try {
 
     $redelivery = Invoke-RestMethod `
         -Method Post `
-        -Uri "$BaseUrl/api/v1/deliveries/$deliveryId/redeliveries"
+        -Uri "$BaseUrl/api/v1/deliveries/$deliveryId/redeliveries" `
+        -Headers @{ "Authorization" = "Bearer $OperatorToken" }
     if ($redelivery.status -ne "PENDING") {
         throw "Redelivery request was not accepted as PENDING"
     }
@@ -124,4 +131,5 @@ try {
     $deliveryLogs | ForEach-Object { Write-Host $_.Line }
 } finally {
     Pop-Location
+    $env:HOOK_RELAY_OPERATOR_TOKEN = $previousOperatorToken
 }

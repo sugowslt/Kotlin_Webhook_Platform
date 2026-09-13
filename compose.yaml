@@ -41,6 +41,7 @@ services:
       DB_PASSWORD: hook_relay
       HOOK_RELAY_SECURITY_ALLOWED_SCHEMES: http,https
       HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
+      HOOK_RELAY_OPERATOR_TOKEN: ${HOOK_RELAY_OPERATOR_TOKEN:-local-demo-operator-token-not-secret}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
