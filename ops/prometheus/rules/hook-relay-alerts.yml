@@ -1,0 +1,29 @@
+groups:
+  - name: hook-relay
+    rules:
+      - alert: HookRelayTargetDown
+        expr: max by (job) (up{job="hook-relay"}) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: HookRelay 수집 대상이 응답하지 않음
+          description: HookRelay 애플리케이션의 Prometheus 수집 대상이 1분 이상 모두 응답하지 않았습니다.
+
+      - alert: HookRelayDeliveryQueueStalled
+        expr: max by (job) (hookrelay_delivery_queue_depth{job="hook-relay", state="stalled"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: lease 없는 처리 작업이 남아 있음
+          description: PROCESSING 상태이지만 lease가 없는 전달 작업이 1분 이상 남아 있습니다.
+
+      - alert: HookRelayDeliveryClaimFailures
+        expr: sum by (job) (increase(hookrelay_delivery_claim_seconds_count{job="hook-relay", outcome="failed"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 전달 작업 선점 쿼리가 실패함
+          description: 최근 5분 동안 전달 작업 선점 쿼리 실패가 발생했고 1분 이상 계속 관측됐습니다.

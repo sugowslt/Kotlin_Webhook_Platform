@@ -1,0 +1,73 @@
+rule_files:
+  - ../rules/hook-relay-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: 정상 상태에서는 경보가 발생하지 않는다
+    interval: 1m
+    input_series:
+      - series: 'up{job="hook-relay", instance="app:8080"}'
+        values: '1 1 1 1 1 1 1'
+      - series: 'hookrelay_delivery_queue_depth{job="hook-relay", instance="app:8080", state="stalled"}'
+        values: '0 0 0 0 0 0 0'
+      - series: 'hookrelay_delivery_claim_seconds_count{job="hook-relay", instance="app:8080", outcome="failed"}'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HookRelayTargetDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HookRelayDeliveryQueueStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HookRelayDeliveryClaimFailures
+        exp_alerts: []
+
+  - name: 모든 수집 대상 중단이 1분 이어지면 경보가 발생한다
+    interval: 1m
+    input_series:
+      - series: 'up{job="hook-relay", instance="app:8080"}'
+        values: '1 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HookRelayTargetDown
+        exp_alerts:
+          - exp_labels:
+              job: hook-relay
+              severity: critical
+            exp_annotations:
+              summary: HookRelay 수집 대상이 응답하지 않음
+              description: HookRelay 애플리케이션의 Prometheus 수집 대상이 1분 이상 모두 응답하지 않았습니다.
+
+  - name: lease 없는 처리 작업이 1분 이어지면 경보가 발생한다
+    interval: 1m
+    input_series:
+      - series: 'hookrelay_delivery_queue_depth{job="hook-relay", instance="app:8080", state="stalled"}'
+        values: '0 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HookRelayDeliveryQueueStalled
+        exp_alerts:
+          - exp_labels:
+              job: hook-relay
+              severity: warning
+            exp_annotations:
+              summary: lease 없는 처리 작업이 남아 있음
+              description: PROCESSING 상태이지만 lease가 없는 전달 작업이 1분 이상 남아 있습니다.
+
+  - name: 최근 5분의 선점 실패가 1분 이어지면 경보가 발생한다
+    interval: 1m
+    input_series:
+      - series: 'hookrelay_delivery_claim_seconds_count{job="hook-relay", instance="app:8080", outcome="failed"}'
+        values: '0 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HookRelayDeliveryClaimFailures
+        exp_alerts:
+          - exp_labels:
+              job: hook-relay
+              severity: warning
+            exp_annotations:
+              summary: 전달 작업 선점 쿼리가 실패함
+              description: 최근 5분 동안 전달 작업 선점 쿼리 실패가 발생했고 1분 이상 계속 관측됐습니다.
