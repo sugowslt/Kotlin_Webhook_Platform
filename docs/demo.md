@@ -75,6 +75,18 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 
 이전 시연 데이터는 삭제하지 않습니다. 고유 이벤트 유형으로 이번 실행의 DB 작업을 구분하며, 실행이 끝났을 때 `FAILED`, `DEAD_LETTER`, lease 없는 `PROCESSING` 작업이 있으면 실패로 처리합니다.
 
+### Worker HTTP 전달 처리량
+
+```powershell
+.\demo\run-worker-throughput-demo.ps1
+```
+
+스크립트는 Worker 실행 주기를 1시간으로 늘리고, k6 VU 50개가 고유 이벤트 500건을 나눠 접수하도록 합니다. 전달 작업 500건이 모두 `PENDING`이고 시도 이력이 없는지 확인한 뒤 Worker를 기본 batch 20건·fixed delay 1초로 다시 시작합니다. 이 과정을 3회 반복하고 첫 시도 시작부터 마지막 시도 완료까지의 처리량을 계산합니다.
+
+매회 이벤트·전달·시도 이력·수신 요청이 각각 500건인지 대조하고 k6 검사 실패, HTTP 오류, 누락된 iteration이 있으면 실행을 중단합니다. 활성 전달 작업이 남아 있을 때도 측정을 시작하지 않습니다. 기존 데이터는 삭제하지 않으며 종료 시 Worker 주기와 수신기 지연을 Compose 기본값으로 복구합니다.
+
+측정 조건과 결과는 [Worker HTTP 전달 처리량 측정](worker-throughput.md)에 기록했습니다.
+
 정상 실행 후 아래 화면을 확인할 수 있습니다.
 
 - Grafana: [Hook Relay Overview](http://127.0.0.1:3000/d/hook-relay-overview)

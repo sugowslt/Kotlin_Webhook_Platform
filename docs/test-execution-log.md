@@ -228,3 +228,27 @@ Prometheus가 `/actuator/prometheus`를 호출할 때마다 DB 쿼리가 실행�
 - 최종 상태: 경보 3개 모두 `health=ok`, `inactive`, 활성 전달 작업 없음
 
 기본 전달 시연은 volume에 남아 있던 `demo.created` 구독 5개와 이번 실행에서 만든 구독 1개가 함께 동작했습니다. 스크립트가 API의 `deliveryCount=6`을 기준으로 DB 성공 건수를 대조했고 6개 모두 완료됐습니다. 수동 재전송과 강제 종료 복구는 실행마다 고유 이벤트 유형을 사용해 이전 데이터와 분리했습니다.
+
+## 2026-09-15 Worker HTTP 전달 처리량 측정
+
+- 환경: Windows 11, Java 17.0.18, Gradle 9.3.1, Docker 29.7.2, Docker Compose 5.5.1
+- 전체 테스트 명령: `gradlew.bat test --rerun-tasks`
+- 전체 테스트 결과: 56개 성공, 실패 0개, 오류 0개, skipped 0개
+- 측정 명령: `.\demo\run-worker-throughput-demo.ps1`
+- 적재 조건: k6 `shared-iterations`, VU 50개, 매회 이벤트 500건
+- Worker 조건: 단일 인스턴스, batch 20건, fixed delay 1초, lease 30초
+- 수신 조건: 로컬 수신기, 응답 지연 0ms, `204 No Content`
+- 처리량: 17.85건/초, 17.88건/초, 17.79건/초
+- 평균·중앙값·범위: 17.84건/초, 17.85건/초, 17.79~17.88건/초
+- 처리 구간: 28.006초, 27.967초, 28.104초
+- 전달 1건 평균: 7.045ms, 7.010ms, 7.282ms
+- 회차별 대조: 이벤트·전달·시도 이력·수신 요청 각각 500건
+- k6 결과: 회차별 기능 검사 1,500개 성공, HTTP 오류 0건, dropped iteration 0건
+- 종료 상태: Worker 주기 1초, 수신기 지연 250ms 복구, 활성 전달 작업 0건
+- 제외: 다중 Worker, 외부 네트워크와 TLS, 수신 지연, 재시도·timeout, 운영 용량 추정
+
+처리 구간은 각 회차의 첫 시도 `started_at`부터 마지막 시도 `finished_at`까지 계산했습니다. 애플리케이션 컨테이너 재시작과 health check가 포함된 전체 경과 시간은 처리량 산정에서 제외했습니다.
+
+초기 3회 측정 뒤 이벤트 건수도 전달 건수와 별도로 대조하도록 스크립트를 보완하고 같은 조건으로 3회 다시 실행했습니다. 최종 결과는 보완 후 측정값만 기록했습니다. 전달 1건의 내부 처리 시간은 평균 약 7.1ms였지만 batch 20건을 처리한 뒤 fixed delay 1초가 적용돼 유효 처리량은 평균 17.84건/초였습니다.
+
+상세 조건과 재현 방법은 [Worker HTTP 전달 처리량 측정](worker-throughput.md)에 기록했습니다.
