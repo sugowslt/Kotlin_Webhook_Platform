@@ -20,7 +20,9 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
 - Bearer 토큰과 `OPERATOR` 권한을 사용한 수동 재전송 보호
 - 선점 가능·예약·처리·정체 작업 수와 선점 SQL 실행 시간 지표
+- 고정 지연 수신기를 사용한 작업 대기열 적체 관측
 - 전달 작업 선점 수와 결과별 처리 시간 지표
+- Prometheus 경보 규칙과 `promtool` 단위 테스트
 - k6로 고정 요청률 이벤트 접수 측정
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
@@ -84,6 +86,8 @@ Redis와 Kafka는 첫 구현에 넣지 않습니다. PostgreSQL만으로 작업 
 
 작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled` 네 상태로 나눕니다. `claimable`에는 바로 선점할 수 있는 작업과 lease가 만료된 작업이 포함됩니다. `stalled`는 `PROCESSING` 상태인데 lease가 없는 비정상 작업입니다. 5초마다 PostgreSQL을 한 번 조회해 Gauge를 갱신하므로 Prometheus scrape 요청이 DB 쿼리를 직접 실행하지 않습니다.
 
+Worker가 전달 요청을 처리하는 동안 Gauge 갱신이 밀리지 않도록 Spring 스케줄러 pool은 2개 스레드를 사용합니다. Prometheus에는 전체 애플리케이션 대상 중단, lease 없는 처리 작업, 선점 쿼리 실패를 감지하는 경보 규칙을 등록했습니다. 로컬 Compose에는 Alertmanager를 연결하지 않아 경보 상태만 확인할 수 있고 외부 알림은 전송하지 않습니다.
+
 여러 애플리케이션 인스턴스가 같은 DB를 보면 각 인스턴스가 전역 작업 수를 동일하게 노출할 수 있습니다. Grafana의 작업 대기열 그래프는 인스턴스별 값을 더하지 않고 상태별 최댓값을 사용합니다. 처리 결과는 `succeeded`, `retry_scheduled`, `failed`, `dead_letter`, `lease_lost`, `processing_error`로 구분하며 전달 ID, 구독 ID, endpoint URL처럼 계속 늘어날 수 있는 값은 태그에서 제외했습니다.
 
 지표는 `/actuator/metrics`에서 확인할 수 있고 Prometheus scrape 형식은 `/actuator/prometheus`에서 제공합니다. 로컬 Docker Compose 환경에서는 Prometheus가 5초마다 수집하며 Grafana의 `Hook Relay Overview` 대시보드에서 작업 대기열, 선점 시간, 전달 결과를 확인할 수 있습니다.
@@ -110,6 +114,12 @@ Worker 강제 종료 후 복구는 아래 스크립트로 확인합니다. 첫 �
 
 ```powershell
 .\demo\run-crash-recovery-demo.ps1
+```
+
+작업 대기열 변화는 수신 응답을 250ms 늦추고 고유 이벤트 100건을 접수하는 스크립트로 확인합니다. PostgreSQL 상태와 Prometheus Gauge를 함께 표본화하고 이벤트·전달·시도 이력 건수가 모두 일치하는지 검사합니다.
+
+```powershell
+.\demo\run-backlog-observability-demo.ps1
 ```
 
 ```powershell
@@ -164,8 +174,12 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [x] 실패한 전달만 수동 재전송되고 동시 요청은 한 건만 접수되는가
 - [x] 운영자 토큰이 없거나 일치하지 않으면 수동 재전송이 거부되는가
 - [x] 작업 대기열 상태와 선점 SQL 실행 시간이 Prometheus에 노출되는가
+- [x] Worker 처리 중에도 작업 대기열 Gauge가 독립적으로 갱신되는가
+- [x] Prometheus 경보가 정상·대상 중단·정체·선점 실패 조건을 구분하는가
 
 2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
+
+2026-09-13에는 응답을 250ms 늦춘 로컬 수신기로 전달 작업 100건을 처리했습니다. 1.86초 동안 접수한 작업이 34.08초 안에 모두 끝났고 PostgreSQL과 Prometheus에서 `claimable` 최대 80건을 함께 확인했습니다. 이 값은 단일 Worker와 로컬 고정 지연 조건의 관측 결과이며 운영 처리량이나 경보 임계값으로 사용하지 않습니다.
 
 ## 문서
 
@@ -175,6 +189,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [구현 순서와 완료 기준](docs/roadmap.md)
 - [테스트 실행 기록](docs/test-execution-log.md)
 - [이벤트 접수 부하 측정](docs/load-test.md)
+- [작업 대기열 적체 관측](docs/backlog-observability.md)
 - [Docker Compose 로컬 시연](docs/demo.md)
 
 ## 참고 기준
@@ -196,3 +211,6 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [Spring Security Stateless 인증](https://docs.spring.io/spring-security/reference/servlet/authentication/session-management.html)
 - [Micrometer Gauge](https://docs.micrometer.io/micrometer/reference/concepts/gauges.html)
 - [Micrometer Timer](https://docs.micrometer.io/micrometer/reference/concepts/timers.html)
+- [Spring Task 실행과 스케줄링](https://docs.spring.io/spring-framework/reference/integration/scheduling.html)
+- [Prometheus 경보 규칙](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+- [Prometheus 규칙 단위 테스트](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/)

@@ -181,3 +181,50 @@
 작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled`로 집계합니다. `claimable`은 `PENDING`·`RETRY_WAIT` 중 실행 시각이 지난 작업과 lease가 만료된 `PROCESSING` 작업입니다. 미래에 실행할 작업은 `scheduled`, 유효한 lease가 있으면 `leased`, `PROCESSING`인데 lease가 없으면 `stalled`로 분류했습니다. PostgreSQL 통합 테스트에서는 네 상태를 각각 만든 뒤 `2, 1, 1, 0`으로 집계되는지 확인했습니다.
 
 Prometheus가 `/actuator/prometheus`를 호출할 때마다 DB 쿼리가 실행되지 않도록 별도 sampler가 5초마다 상태를 읽어 메모리 Gauge를 갱신합니다. 같은 DB를 보는 애플리케이션이 여러 개면 전역 작업 수가 인스턴스마다 반복되므로 Grafana에서는 `sum` 대신 상태별 `max`를 사용했습니다. 선점 SQL은 성공과 실패를 고정된 outcome 태그로 나눠 Timer에 기록합니다.
+
+## 2026-09-13 작업 대기열 적체 관측
+
+- 환경: Windows, Java 17.0.18, Docker 29.7.2, Docker Compose 5.5.1
+- 전체 테스트 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 전체 테스트 결과: 56개 성공, 실패 0개, 오류 0개, skipped 0개
+- 시연 명령: `.\demo\run-backlog-observability-demo.ps1`
+- 조건: 이벤트 100건, 전달 작업 100건, 수신 응답 지연 250ms, Worker batch 20건
+- 접수 시간: 1.86초
+- 전체 배수 시간: 34.08초
+- PostgreSQL 최대값: `claimable=80`, `leased=20`
+- Prometheus 최대값: `claimable=80`, `leased=17`
+- 선점 Timer: 8회, 평균 12.685ms
+- DB 대조: 이벤트 100건, 전달 100건, 시도 이력 100건, 실패·정체 0건
+- 종료 상태: 활성 전달 작업 없음, 네 작업 대기열 Gauge 모두 0
+- 제외: 운영 처리량 추정, 다중 Worker, 장시간 추이, 운영 경보 임계값
+
+첫 실행은 이벤트·전달·시도 이력 100건이 모두 일치했지만 PostgreSQL의 `leased` 최대값 20건과 달리 Prometheus에서는 0으로 관측됐습니다. 기본 단일 스케줄러 스레드에서 Worker와 Gauge sampler가 함께 실행돼, Worker가 batch를 처리하는 동안 sampler가 기다린 것이 원인이었습니다.
+
+`spring.task.scheduling.pool.size`를 2로 설정해 Worker와 sampler가 독립적으로 실행되도록 바꿨습니다. 같은 조건으로 다시 측정하자 PostgreSQL과 Prometheus에서 `claimable` 최대 80건이 일치했고 Prometheus에서도 `leased` 최대 17건을 확인했습니다. 두 값의 차이는 PostgreSQL 1초, Gauge 5초인 표본 주기에서 발생했습니다.
+
+## 2026-09-13 Prometheus 경보 규칙
+
+- 구성 검사: `docker compose config --quiet`
+- 규칙 검사: `promtool check rules`, 3개 성공
+- 규칙 테스트: `promtool test rules`, 4개 시나리오 성공
+- 실제 로드 결과: 규칙 3개 모두 `health=ok`, `state=inactive`, 활성 경보 0개
+- 검증 조건: 정상 상태, 전체 수집 대상 중단, lease 없는 처리 작업, 선점 쿼리 실패
+- 제외: Alertmanager, 이메일·메신저 알림, 운영 환경 임계값
+
+첫 검사 명령은 Prometheus 이미지의 기본 entrypoint가 `prometheus`인 상태에서 `promtool`을 하위 명령처럼 전달해 `unexpected promtool`로 끝났습니다. `--entrypoint promtool`을 명시해 이미지에 포함된 검사 도구를 직접 실행했고 규칙 3개와 단위 테스트가 모두 통과했습니다.
+
+경보는 모든 애플리케이션 수집 대상이 1분 이상 중단된 경우, lease 없는 `PROCESSING` 작업이 1분 이상 남은 경우, 최근 5분 선점 실패가 1분 이상 계속 관측된 경우로 제한했습니다. 로컬 적체 수치는 운영 SLO와 유입량을 반영하지 않으므로 작업 건수 임계값에는 사용하지 않았습니다.
+
+## 2026-09-15 최종 회귀 검증
+
+- 전체 테스트 명령: `gradlew.bat test check --rerun-tasks --no-daemon`
+- 전체 테스트 결과: 56개 성공, 실패 0개, 오류 0개, skipped 0개
+- 기본 전달: 기존 구독을 포함한 전달 작업 6개 모두 `SUCCEEDED`
+- 수동 재전송: 동일 전달 ID, 시도 횟수 2회, 이력 `FAILED,SUCCEEDED`
+- Worker 강제 종료 복구: 종료 직후 `PROCESSING|0|0`, lease 만료 후 `SUCCEEDED|1|SUCCEEDED`
+- 복구 수신 기록: 동일 전달 ID 요청 2건, 첫 요청 `HELD`, 두 번째 요청 `204`
+- Prometheus 규칙 검사: 3개 성공
+- Prometheus 규칙 테스트: 4개 시나리오 성공
+- 최종 상태: 경보 3개 모두 `health=ok`, `inactive`, 활성 전달 작업 없음
+
+기본 전달 시연은 volume에 남아 있던 `demo.created` 구독 5개와 이번 실행에서 만든 구독 1개가 함께 동작했습니다. 스크립트가 API의 `deliveryCount=6`을 기준으로 DB 성공 건수를 대조했고 6개 모두 완료됐습니다. 수동 재전송과 강제 종료 복구는 실행마다 고유 이벤트 유형을 사용해 이전 데이터와 분리했습니다.

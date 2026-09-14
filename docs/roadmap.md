@@ -42,6 +42,8 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 - [x] 다중 Worker 중복 처리 검증
 - [x] Micrometer 전달 지표
 - [x] 작업 대기열 깊이와 선점 SQL 실행 시간 지표
+- [x] 고정 지연 조건의 작업 대기열 적체 관측
+- [x] Prometheus 경보 규칙과 단위 테스트
 - [x] 고정 조건 부하 측정
 - [x] Docker Compose 기본 전달 시연
 - [x] Docker Compose 실패 후 수동 재전송 시연
@@ -49,6 +51,8 @@ Worker 정책과 HTTP 요청 생성을 단위 테스트로 확인했습니다. P
 - [x] Docker Compose 실행 경로와 시연 화면
 
 Worker 선점 수와 결과별 처리 횟수·소요 시간을 Micrometer로 기록하고 Prometheus endpoint 노출까지 확인했습니다. 작업 대기열은 네 상태의 Gauge로 기록하고 선점 SQL 실행 시간은 결과별 Timer로 측정합니다. 전달 ID, 구독 ID, endpoint URL은 태그에 넣지 않았습니다.
+
+Worker와 Gauge sampler가 서로 기다리지 않도록 Spring 스케줄러 pool을 2개 스레드로 분리했습니다. 응답을 250ms 늦춘 수신기로 전달 100건을 처리하면서 PostgreSQL과 Prometheus의 적체 변화를 함께 확인했습니다. Prometheus 경보는 전체 대상 중단, lease 없는 처리 작업, 선점 실패 세 조건만 두고 `promtool`로 검증했습니다.
 
 이벤트 접수 경로는 k6로 초당 50건을 60초 동안 측정했습니다. 응답 시간 목표를 미리 정하지 않고 실제 측정값과 환경, 제외 범위를 함께 기록했습니다. Worker HTTP 전달 처리량은 별도 측정이 필요합니다.
 

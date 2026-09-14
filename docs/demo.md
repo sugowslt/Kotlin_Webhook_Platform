@@ -65,6 +65,16 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 
 이 시나리오는 PostgreSQL에 저장한 작업이 Worker 종료 후 복구되는지 확인합니다. 첫 요청이 외부 서버에 도착한 뒤 결과 기록 전에 Worker가 종료되므로 수신기에는 같은 전달 ID가 두 번 도착합니다. 전달 대상은 `X-HookRelay-Delivery`를 멱등키로 사용해 중복 처리를 막아야 합니다.
 
+### 작업 대기열 적체 관측
+
+```powershell
+.\demo\run-backlog-observability-demo.ps1
+```
+
+스크립트는 실행마다 고유 이벤트 유형과 구독을 만들고 이벤트 100건을 접수합니다. Webhook 수신기는 각 응답을 250ms 늦춥니다. 측정 중 PostgreSQL의 작업 상태와 Prometheus의 `claimable`, `leased` Gauge를 1초 간격으로 확인하고, 마지막에는 이벤트·전달·시도 이력이 각각 100건인지 대조합니다.
+
+이전 시연 데이터는 삭제하지 않습니다. 고유 이벤트 유형으로 이번 실행의 DB 작업을 구분하며, 실행이 끝났을 때 `FAILED`, `DEAD_LETTER`, lease 없는 `PROCESSING` 작업이 있으면 실패로 처리합니다.
+
 정상 실행 후 아래 화면을 확인할 수 있습니다.
 
 - Grafana: [Hook Relay Overview](http://127.0.0.1:3000/d/hook-relay-overview)
@@ -74,6 +84,18 @@ Docker Desktop을 실행하고 저장소 루트에서 아래 스크립트를 실
 Grafana 대시보드는 애플리케이션 상태, 선점한 전달 수, 작업 대기열 상태, 선점 SQL 평균 실행 시간, 성공·Dead Letter 건수, 결과별 처리율과 평균 처리 시간을 보여줍니다. 모두 8개 패널이며 데이터 소스와 대시보드는 파일로 provisioning하므로 별도 설정이나 로그인은 필요하지 않습니다.
 
 작업 대기열은 `claimable`, `scheduled`, `leased`, `stalled`로 구분합니다. 여러 애플리케이션 인스턴스가 같은 PostgreSQL 작업 수를 각각 노출해도 합산되지 않도록 Grafana 쿼리는 상태별 최댓값을 사용합니다.
+
+## 경보 규칙
+
+Prometheus의 [Alerts](http://127.0.0.1:9090/alerts) 화면에서 아래 규칙을 확인할 수 있습니다.
+
+| 경보 | 조건 | 대기 시간 |
+| --- | --- | ---: |
+| `HookRelayTargetDown` | `hook-relay` 수집 대상이 모두 응답하지 않음 | 1분 |
+| `HookRelayDeliveryQueueStalled` | lease 없는 `PROCESSING` 작업이 1건 이상 남음 | 1분 |
+| `HookRelayDeliveryClaimFailures` | 최근 5분 선점 실패가 계속 관측됨 | 1분 |
+
+규칙 파일은 `promtool check rules`로 검사하고 정상 상태와 대상 중단·정체·선점 실패를 `promtool test rules`로 검증합니다. 로컬 Compose에는 Alertmanager를 포함하지 않아 이메일이나 메신저 알림은 보내지 않습니다.
 
 ## 보안 경계
 
