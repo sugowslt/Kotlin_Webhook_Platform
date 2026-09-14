@@ -20,7 +20,7 @@ services:
     image: python:3.13-alpine
     environment:
       PYTHONUNBUFFERED: "1"
-      WEBHOOK_DELAY_MILLIS: "250"
+      WEBHOOK_DELAY_MILLIS: "${WEBHOOK_DELAY_MILLIS:-250}"
     command: ["python", "/demo/webhook-receiver.py"]
     volumes:
       - ./demo/webhook-receiver.py:/demo/webhook-receiver.py:ro
@@ -43,6 +43,7 @@ services:
       HOOK_RELAY_SECURITY_ALLOWED_SCHEMES: http,https
       HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
       HOOK_RELAY_OPERATOR_TOKEN: ${HOOK_RELAY_OPERATOR_TOKEN:-local-demo-operator-token-not-secret}
+      HOOK_RELAY_WORKER_POLL_INTERVAL_MILLIS: "${HOOK_RELAY_WORKER_POLL_INTERVAL_MILLIS:-1000}"
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
