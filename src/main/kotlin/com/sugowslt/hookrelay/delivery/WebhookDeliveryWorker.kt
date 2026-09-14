@@ -5,6 +5,7 @@ import com.sugowslt.hookrelay.security.WebhookSignatureService
 import com.sugowslt.hookrelay.security.WebhookUrlPolicy
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.io.IOException
@@ -13,6 +14,7 @@ import java.time.Duration
 import java.time.Instant
 
 @Component
+@ConditionalOnBooleanProperty(prefix = "hook-relay.worker", name = ["enabled"], matchIfMissing = true)
 class WebhookDeliveryWorker(
     private val deliveryQueue: DeliveryQueue,
     private val httpClient: WebhookHttpClient,

@@ -43,9 +43,34 @@ services:
       HOOK_RELAY_SECURITY_ALLOWED_SCHEMES: http,https
       HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
       HOOK_RELAY_OPERATOR_TOKEN: ${HOOK_RELAY_OPERATOR_TOKEN:-local-demo-operator-token-not-secret}
+      HOOK_RELAY_WORKER_ENABLED: "${HOOK_RELAY_WORKER_ENABLED:-true}"
       HOOK_RELAY_WORKER_POLL_INTERVAL_MILLIS: "${HOOK_RELAY_WORKER_POLL_INTERVAL_MILLIS:-1000}"
     ports:
       - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      webhook-receiver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  worker:
+    image: hook-relay-app:local
+    profiles: ["worker-scale"]
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/hook_relay
+      DB_USERNAME: hook_relay
+      DB_PASSWORD: hook_relay
+      HOOK_RELAY_SECURITY_ALLOWED_SCHEMES: http,https
+      HOOK_RELAY_SECURITY_ALLOW_NON_PUBLIC_TARGETS: "true"
+      HOOK_RELAY_OPERATOR_TOKEN: ${HOOK_RELAY_OPERATOR_TOKEN:-local-demo-operator-token-not-secret}
+      HOOK_RELAY_WORKER_ENABLED: "true"
+      HOOK_RELAY_WORKER_POLL_INTERVAL_MILLIS: "${HOOK_RELAY_SCALE_WORKER_POLL_INTERVAL_MILLIS:-1000}"
     depends_on:
       postgres:
         condition: service_healthy

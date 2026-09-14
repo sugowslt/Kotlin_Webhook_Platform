@@ -30,6 +30,7 @@ hook-relay:
     allow-non-public-targets: false
     operator-token: ${HOOK_RELAY_OPERATOR_TOKEN:}
   worker:
+    enabled: true
     batch-size: 20
     lease-seconds: 30
     request-timeout-seconds: 5
