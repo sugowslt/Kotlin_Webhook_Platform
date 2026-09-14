@@ -301,6 +301,32 @@ function Invoke-SeedLoad {
     }
 }
 
+function Wait-ReceiverRequestCount {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RunId,
+        [Parameter(Mandatory)]
+        [int]$ExpectedCount
+    )
+
+    $observedCount = 0
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $receiverLogs = docker compose logs --no-log-prefix webhook-receiver
+        if ($LASTEXITCODE -ne 0) {
+            throw "Webhook receiver log query failed"
+        }
+        $observedCount = @($receiverLogs | Select-String -SimpleMatch $RunId).Count
+        if ($observedCount -eq $ExpectedCount) {
+            return $observedCount
+        }
+        if ($observedCount -gt $ExpectedCount) {
+            throw "Receiver request count exceeded expectation: expected=$ExpectedCount actual=$observedCount"
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Receiver request count did not reach expectation within 20 seconds: expected=$ExpectedCount actual=$observedCount"
+}
+
 function Get-Median {
     param(
         [Parameter(Mandatory)]
@@ -369,6 +395,13 @@ try {
                     -ContentType "application/json" `
                     -Body $subscriptionBody
 
+                Write-Host ""
+                Write-Host "Worker scaling run started"
+                Write-Host "events=$eventCount"
+                Write-Host "workers=$workerCount"
+                Write-Host "repetition=$repetition"
+                Write-Host "eventType=$eventType"
+
                 $seed = [Diagnostics.Stopwatch]::StartNew()
                 Invoke-SeedLoad `
                     -EventType $eventType `
@@ -428,14 +461,9 @@ WHERE e.event_type = '$eventType';
                     throw "Processing duration must be positive"
                 }
 
-                $receiverLogs = docker compose logs --no-log-prefix webhook-receiver
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Webhook receiver log query failed"
-                }
-                $receiverRequestCount = @($receiverLogs | Select-String -SimpleMatch $runId).Count
-                if ($receiverRequestCount -ne $eventCount) {
-                    throw "Receiver request count mismatch: expected=$eventCount actual=$receiverRequestCount"
-                }
+                $receiverRequestCount = Wait-ReceiverRequestCount `
+                    -RunId $runId `
+                    -ExpectedCount $eventCount
 
                 $throughput = $eventCount / $processingSeconds
                 $claimAverageMilliseconds = if ($claimQueries -gt 0) {

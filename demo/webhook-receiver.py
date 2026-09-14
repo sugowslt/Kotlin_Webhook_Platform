@@ -15,6 +15,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
     failed_once_lock = Lock()
     held_once = set()
     held_once_lock = Lock()
+    output_lock = Lock()
 
     def do_GET(self):
         if self.path != "/health":
@@ -63,7 +64,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
         record["responseStatus"] = "HELD" if should_hold else status_code
         if should_delay:
             record["delayMillis"] = DELAY_MILLISECONDS
-        print(json.dumps(record, ensure_ascii=False), flush=True)
+        with self.output_lock:
+            print(json.dumps(record, ensure_ascii=False), flush=True)
         if should_hold:
             sleep(60)
         elif should_delay:
