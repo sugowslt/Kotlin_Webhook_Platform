@@ -1,5 +1,7 @@
 # HookRelay
 
+[![CI](https://github.com/sugowslt/Kotlin_Webhook_Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/sugowslt/Kotlin_Webhook_Platform/actions/workflows/ci.yml)
+
 Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하거나 격리하는 Kotlin/Spring Boot 프로젝트를 만들어봤습니다.
 
 ## 현재 상태
