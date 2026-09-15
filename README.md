@@ -25,11 +25,12 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - Prometheus 경보 규칙과 `promtool` 단위 테스트
 - k6로 고정 요청률 이벤트 접수 측정
 - k6 고정 건수와 로컬 수신기를 사용한 Worker HTTP 전달 처리량 측정
+- Worker 실행 분리와 1개·2개·4개 확장 처리량 비교
 - Docker Compose 기반 로컬 전달 시연과 Grafana 대시보드
 
 Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. Compose에서는 HTTP 응답 대기 중 Worker를 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 복구하는 과정을 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
-2026-09-15 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 56개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 15개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-15 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 58개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 15개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -129,6 +130,12 @@ Worker HTTP 전달 처리량은 Worker 실행 주기를 1시간으로 늘린 상
 .\demo\run-worker-throughput-demo.ps1
 ```
 
+Worker 수에 따른 확장은 대기열 500건·1,000건과 Worker 1개·2개·4개 조합을 각각 3회 측정합니다. API 애플리케이션의 Worker를 끄고 Compose profile의 Worker만 확장해 모든 인스턴스가 같은 PostgreSQL 작업 큐를 처리하도록 고정합니다.
+
+```powershell
+.\demo\run-worker-scaling-demo.ps1
+```
+
 ```powershell
 docker compose down
 ```
@@ -184,12 +191,15 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [x] Worker 처리 중에도 작업 대기열 Gauge가 독립적으로 갱신되는가
 - [x] Prometheus 경보가 정상·대상 중단·정체·선점 실패 조건을 구분하는가
 - [x] 기본 Worker 설정에서 실제 HTTP 전달 처리량을 반복 측정했는가
+- [x] 대기열 크기와 Worker 수를 바꿔 처리량과 선점 시간을 비교했는가
 
 2026-09-12 로컬 환경에서 이벤트 접수 경로에 초당 50건을 60초 동안 보냈습니다. 측정 요청 3,001건의 p50은 13.77ms, p95는 28.20ms, p99는 49.73ms였으며 오류와 dropped iteration은 없었습니다. 이벤트마다 전달 작업 1건을 저장했고 DB 건수도 요청 수와 일치했습니다. Worker HTTP 전달은 이번 측정에서 제외했습니다.
 
 2026-09-13에는 응답을 250ms 늦춘 로컬 수신기로 전달 작업 100건을 처리했습니다. 1.86초 동안 접수한 작업이 34.08초 안에 모두 끝났고 PostgreSQL과 Prometheus에서 `claimable` 최대 80건을 함께 확인했습니다. 이 값은 단일 Worker와 로컬 고정 지연 조건의 관측 결과이며 운영 처리량이나 경보 임계값으로 사용하지 않습니다.
 
 2026-09-15에는 응답 지연이 없는 로컬 수신기로 전달 작업 500건을 3회 처리했습니다. 첫 시도 시작부터 마지막 시도 완료까지 평균 28.026초였고 처리량은 평균 17.84건/초, 범위는 17.79~17.88건/초였습니다. 매회 이벤트·전달·시도 이력·수신 요청이 각각 500건으로 일치했고 실패는 없었습니다. 단일 Worker와 기본 batch 20건·fixed delay 1초 조건의 로컬 기준값이며 최대 처리량이나 운영 용량을 뜻하지 않습니다.
+
+같은 날 대기열 500건과 1,000건에서 Worker 1개·2개·4개를 각각 3회 비교했습니다. Worker 4개의 평균 처리량은 500건에서 60.95건/초, 1,000건에서 65.12건/초로 Worker 1개 대비 각각 3.46배와 3.73배였습니다. 현재 범위에서는 선점 실패나 중복 처리가 없었지만, 로컬 성공 응답 조건의 결과이므로 PostgreSQL의 운영 한계를 뜻하지 않습니다.
 
 ## 문서
 
@@ -200,6 +210,7 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [테스트 실행 기록](docs/test-execution-log.md)
 - [이벤트 접수 부하 측정](docs/load-test.md)
 - [Worker HTTP 전달 처리량 측정](docs/worker-throughput.md)
+- [다중 Worker 확장 측정](docs/worker-scaling.md)
 - [작업 대기열 적체 관측](docs/backlog-observability.md)
 - [Docker Compose 로컬 시연](docs/demo.md)
 
@@ -217,6 +228,8 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [k6 thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
 - [Docker Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/)
 - [Docker Compose 강제 종료](https://docs.docker.com/reference/cli/docker/compose/kill/)
+- [Docker Compose profile](https://docs.docker.com/compose/how-tos/profiles/)
+- [Docker Compose `up --scale`](https://docs.docker.com/reference/cli/docker/compose/up/)
 - [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/17/sql-select.html)
 - [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
 - [Spring Boot Testcontainers 지원](https://docs.spring.io/spring-boot/reference/features/dev-services.html)
@@ -225,5 +238,6 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [Micrometer Gauge](https://docs.micrometer.io/micrometer/reference/concepts/gauges.html)
 - [Micrometer Timer](https://docs.micrometer.io/micrometer/reference/concepts/timers.html)
 - [Spring Task 실행과 스케줄링](https://docs.spring.io/spring-framework/reference/integration/scheduling.html)
+- [Spring Boot `ConditionalOnBooleanProperty`](https://docs.spring.io/spring-boot/4.0/api/java/org/springframework/boot/autoconfigure/condition/ConditionalOnBooleanProperty.html)
 - [Prometheus 경보 규칙](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
 - [Prometheus 규칙 단위 테스트](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/)
