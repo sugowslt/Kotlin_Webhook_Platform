@@ -509,6 +509,15 @@ WHERE e.event_type = '$eventType';
             }
         }
     }
+} catch {
+    Write-Warning "Worker scaling run failed: $($_.Exception.Message)"
+    Write-Host ""
+    Write-Host "Scale worker logs (last 100 lines)"
+    docker compose --profile worker-scale logs --tail 100 --no-color worker | Out-Host
+    Write-Host ""
+    Write-Host "Webhook receiver logs (last 100 lines)"
+    docker compose logs --tail 100 --no-color webhook-receiver | Out-Host
+    throw
 } finally {
     try {
         Remove-ScaleWorkers
