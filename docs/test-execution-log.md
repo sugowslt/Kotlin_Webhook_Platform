@@ -277,3 +277,22 @@ Worker 활성 조건 테스트를 처음 일반 `@Configuration`으로 선언했
 측정 후 회귀 검증으로 기본 전달, 수동 재전송, Worker 강제 종료 복구 시나리오를 다시 실행했습니다. 기본 전달은 전달 7건이 모두 성공했고, 수동 재전송은 `FAILED,SUCCEEDED`, 강제 종료 복구는 lease 만료 후 `SUCCEEDED|1|SUCCEEDED`로 끝났습니다.
 
 상세 조건과 회차별 결과는 [다중 Worker 확장 측정](worker-scaling.md)에 기록했습니다.
+
+## 2026-09-15 전달 운영 조회 API
+
+- 전체 테스트 명령: `gradlew.bat test --rerun-tasks`
+- 전체 테스트 결과: 64개 성공, 실패 0개, 오류 0개, skipped 0개
+- PostgreSQL 통합 테스트: 21개 성공
+- Flyway: V3 목록 정렬·상태 필터 인덱스 2개 생성
+- 인증: 무인증 목록·상세 요청 `401 Unauthorized`
+- 목록: 최신순 정렬, 상태 필터, limit 최대 100, cursor 페이지 사이 중복 없음
+- 상세: 현재 상태와 시도 이력 일치, 없는 전달 `404 Not Found`
+- 입력 오류: 잘못된 상태·limit·cursor `400 Bad Request`
+- 응답 경계: payload, endpoint URL, 서명 비밀값 제외
+- Compose 확인: 기존 volume에 V3 적용, 무인증 목록 `401`, 인증 목록·상세 `200`
+
+offset 대신 생성 시각과 전달 UUID를 묶은 keyset cursor를 사용했습니다. 전체 행 수를 매번 세지 않고 `limit + 1`건을 조회해 다음 페이지 존재 여부만 판단합니다. cursor에는 상태 필터도 함께 넣어 다른 조회 조건에 재사용하면 요청을 거부합니다.
+
+조회 API는 기존 재전송 API와 같은 `OPERATOR` 권한으로 보호했습니다. 목록과 상세 응답에는 재전송 판단에 필요한 상태·오류·시도 결과만 포함하고 원본 payload와 Webhook endpoint, 서명 비밀값은 제외했습니다.
+
+상세 동작과 요청 예시는 [전달 조회와 재전송](delivery-operations.md)에 기록했습니다.

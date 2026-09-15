@@ -18,7 +18,8 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 - HMAC 서명 HTTP 전달과 시도 이력 저장
 - `Retry-After`와 지수 backoff를 반영한 재시도
 - `FAILED`·`DEAD_LETTER` 전달의 수동 재전송 API
-- Bearer 토큰과 `OPERATOR` 권한을 사용한 수동 재전송 보호
+- 상태 필터와 cursor를 사용한 전달 목록·시도 이력 조회 API
+- Bearer 토큰과 `OPERATOR` 권한을 사용한 전달 운영 API 보호
 - 선점 가능·예약·처리·정체 작업 수와 선점 SQL 실행 시간 지표
 - 고정 지연 수신기를 사용한 작업 대기열 적체 관측
 - 전달 작업 선점 수와 결과별 처리 시간 지표
@@ -30,7 +31,7 @@ Webhook 이벤트를 비동기로 전달하고 실패한 요청을 재시도하�
 
 Worker 실행 경로와 실패 분류는 단위 테스트로 확인했습니다. Flyway schema, 트랜잭션 rollback, 작업 선점 SQL과 lease 재선점은 Testcontainers PostgreSQL에서 검증했습니다. 두 Worker를 함께 실행한 테스트에서는 첫 Worker가 전달 중인 작업을 두 번째 Worker가 다시 선점하지 않는 것도 확인했습니다. Compose에서는 HTTP 응답 대기 중 Worker를 `SIGKILL`로 종료하고, 재기동한 Worker가 lease 만료 후 같은 전달 ID를 복구하는 과정을 확인했습니다. WireMock에서는 실제 HTTP 본문과 HMAC 헤더, `Retry-After`, redirect 차단을 확인했습니다. Micrometer 지표는 결과별 기록과 Prometheus scrape 응답까지 검증했습니다.
 
-2026-09-15 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 58개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 15개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
+2026-09-15 로컬 Java 17과 Docker 29.7.2 환경에서 전체 테스트 64개가 통과했습니다. 실패 0개, 오류 0개, skipped 0개이며 PostgreSQL 17 Testcontainers 통합 테스트 21개와 WireMock HTTP 통합 테스트 3개가 포함됩니다. 인터넷 외부 주소로 요청을 보내지는 않았습니다.
 
 ## 동작 흐름
 
@@ -59,7 +60,8 @@ flowchart LR
 - timeout, `408`, `429`, `5xx`는 재시도하고 나머지 `4xx`는 영구 실패로 분류합니다.
 - 최대 시도 횟수를 넘긴 작업은 Dead Letter 상태로 옮깁니다.
 - `FAILED`와 `DEAD_LETTER`만 수동 재전송할 수 있습니다. 기존 전달 ID·시도 횟수·이력은 유지하고 대기열에 다시 넣습니다.
-- 수동 재전송은 32자 이상의 운영자 Bearer 토큰이 있어야 요청할 수 있습니다.
+- 전달 목록·상세 조회와 수동 재전송은 32자 이상의 운영자 Bearer 토큰이 있어야 요청할 수 있습니다.
+- 조회 응답에는 payload, endpoint URL, 서명 비밀값을 포함하지 않습니다.
 - 전달 보장은 at-least-once입니다. 외부 서버가 요청을 처리한 직후 Worker가 종료되면 같은 전달 ID가 다시 전송될 수 있습니다.
 - Webhook 요청은 HMAC-SHA256으로 서명합니다.
 - 사용자가 등록한 URL을 서버가 호출하므로 SSRF 방어를 별도 경계로 둡니다.
@@ -167,6 +169,16 @@ curl -X POST http://localhost:8080/api/v1/events/order.created \
 
 같은 멱등키와 같은 요청을 다시 보내면 기존 이벤트 ID를 반환하고 `Idempotency-Replayed: true` 헤더를 붙입니다. 같은 키로 다른 이벤트 유형이나 본문을 보내면 `409 Conflict`로 처리합니다.
 
+운영자는 상태별 전달 목록에서 전달 ID를 찾고 상세 응답에서 시도 이력을 확인할 수 있습니다. 목록은 기본 30건, 최대 100건이며 응답의 `nextCursor`로 다음 페이지를 조회합니다.
+
+```bash
+curl "http://localhost:8080/api/v1/deliveries?status=DEAD_LETTER&limit=30" \
+  -H "Authorization: Bearer $HOOK_RELAY_OPERATOR_TOKEN"
+
+curl http://localhost:8080/api/v1/deliveries/{deliveryId} \
+  -H "Authorization: Bearer $HOOK_RELAY_OPERATOR_TOKEN"
+```
+
 실패가 확정된 전달은 전달 ID로 다시 요청할 수 있습니다. 접수된 작업은 `202 Accepted`와 `PENDING` 상태를 반환하고 Worker가 비동기로 처리합니다. 이미 대기·처리 중이거나 성공한 전달은 `409 Conflict`, 없는 전달은 `404 Not Found`로 응답합니다.
 
 ```bash
@@ -187,6 +199,8 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 - [x] 최대 시도 횟수를 넘긴 작업이 Dead Letter 상태로 이동하는가
 - [x] 실패한 전달만 수동 재전송되고 동시 요청은 한 건만 접수되는가
 - [x] 운영자 토큰이 없거나 일치하지 않으면 수동 재전송이 거부되는가
+- [x] 운영자만 전달 목록과 시도 이력을 중복 없이 페이지 조회할 수 있는가
+- [x] 전달 조회 응답에서 payload와 endpoint·서명 비밀값을 제외했는가
 - [x] 작업 대기열 상태와 선점 SQL 실행 시간이 Prometheus에 노출되는가
 - [x] Worker 처리 중에도 작업 대기열 Gauge가 독립적으로 갱신되는가
 - [x] Prometheus 경보가 정상·대상 중단·정체·선점 실패 조건을 구분하는가
@@ -205,7 +219,8 @@ curl -X POST http://localhost:8080/api/v1/deliveries/{deliveryId}/redeliveries \
 
 - [PostgreSQL 작업 큐를 먼저 사용하는 이유](docs/adr/0001-postgresql-delivery-queue.md)
 - [Webhook 전달을 at-least-once로 복구하는 이유](docs/adr/0002-at-least-once-delivery.md)
-- [수동 재전송 API를 운영자 Bearer 토큰으로 보호하는 이유](docs/adr/0003-operator-bearer-token.md)
+- [전달 운영 API를 Bearer 토큰으로 보호하는 이유](docs/adr/0003-operator-bearer-token.md)
+- [전달 조회와 재전송](docs/delivery-operations.md)
 - [구현 순서와 완료 기준](docs/roadmap.md)
 - [테스트 실행 기록](docs/test-execution-log.md)
 - [이벤트 접수 부하 측정](docs/load-test.md)
