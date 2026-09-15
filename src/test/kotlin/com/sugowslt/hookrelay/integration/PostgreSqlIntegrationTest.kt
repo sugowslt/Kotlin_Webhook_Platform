@@ -132,6 +132,17 @@ class PostgreSqlIntegrationTest {
     }
 
     @Test
+    fun `Flyway가 전달 조회 인덱스를 생성한다`() {
+        val indexes = jdbcTemplate.queryForList(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+            String::class.java,
+        )
+
+        assertTrue(indexes.contains("idx_webhook_deliveries_created"))
+        assertTrue(indexes.contains("idx_webhook_deliveries_status_created"))
+    }
+
+    @Test
     fun `Prometheus endpoint가 전달 지표를 scrape 형식으로 노출한다`() {
         deliveryMetrics.recordClaimed(2)
         val sample = deliveryMetrics.startProcessing()
@@ -230,6 +241,137 @@ class PostgreSqlIntegrationTest {
 
         assertEquals(401, response.status)
         assertEquals("OPERATOR_AUTHENTICATION_REQUIRED", body["code"].asText())
+    }
+
+    @Test
+    fun `운영자 토큰이 없으면 전달 조회를 거부한다`() {
+        val listResponse = mockMvc.perform(get("/api/v1/deliveries"))
+            .andReturn()
+            .response
+        val detailResponse = mockMvc.perform(get("/api/v1/deliveries/${UUID.randomUUID()}"))
+            .andReturn()
+            .response
+
+        assertEquals(401, listResponse.status)
+        assertEquals(401, detailResponse.status)
+        assertEquals(
+            "OPERATOR_AUTHENTICATION_REQUIRED",
+            objectMapper.readTree(listResponse.contentAsString)["code"].asText(),
+        )
+    }
+
+    @Test
+    fun `전달 목록을 최신순으로 중복 없이 페이지 조회하고 상태로 필터링한다`() {
+        insertSubscription("order.created")
+        val oldest = createDelivery("query-oldest", now.minusSeconds(3), DeliveryStatus.FAILED)
+        val middle = createDelivery("query-middle", now.minusSeconds(2), DeliveryStatus.DEAD_LETTER)
+        val newest = createDelivery("query-newest", now.minusSeconds(1), DeliveryStatus.SUCCEEDED)
+
+        val firstResponse = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("limit", "2"),
+        ).andReturn().response
+        val firstBody = objectMapper.readTree(firstResponse.contentAsString)
+        val nextCursor = firstBody["nextCursor"].asText()
+
+        val secondResponse = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("limit", "2")
+                .param("cursor", nextCursor),
+        ).andReturn().response
+        val secondBody = objectMapper.readTree(secondResponse.contentAsString)
+
+        assertEquals(200, firstResponse.status)
+        assertEquals(listOf(newest.toString(), middle.toString()), firstBody["items"].map { it["deliveryId"].asText() })
+        assertTrue(nextCursor.isNotBlank())
+        assertEquals(200, secondResponse.status)
+        assertEquals(listOf(oldest.toString()), secondBody["items"].map { it["deliveryId"].asText() })
+        assertTrue(secondBody["nextCursor"].isNull)
+
+        val filteredResponse = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("status", "failed"),
+        ).andReturn().response
+        val filteredBody = objectMapper.readTree(filteredResponse.contentAsString)
+
+        assertEquals(200, filteredResponse.status)
+        assertEquals(1, filteredBody["items"].size())
+        assertEquals(oldest.toString(), filteredBody["items"][0]["deliveryId"].asText())
+        assertEquals("FAILED", filteredBody["items"][0]["status"].asText())
+    }
+
+    @Test
+    fun `전달 상세에 시도 이력을 노출하고 민감한 요청 정보는 제외한다`() {
+        insertSubscription("order.created")
+        val accepted = eventIntakeService.accept(eventCommand("query-detail", "{\"orderId\":1}"))
+        val deliveryId = deliveryIdByEventId(accepted.eventId)
+        val claimAt = nextAttemptAt()
+        val claimed = deliveryQueue.claim(1, Duration.ofSeconds(10), claimAt).single()
+        assertTrue(
+            deliveryQueue.recordResult(
+                claimed,
+                DeliveryResolution.Failed(400, "HTTP 400"),
+                claimAt.plusSeconds(1),
+            ),
+        )
+
+        val response = mockMvc.perform(
+            get("/api/v1/deliveries/$deliveryId")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN"),
+        ).andReturn().response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(200, response.status)
+        assertEquals(deliveryId.toString(), body["deliveryId"].asText())
+        assertEquals("FAILED", body["status"].asText())
+        assertEquals(1, body["completedAttempts"].asInt())
+        assertEquals(1, body["attempts"].size())
+        assertEquals("FAILED", body["attempts"][0]["outcome"].asText())
+        assertEquals(400, body["attempts"][0]["statusCode"].asInt())
+        assertFalse(body.has("payload"))
+        assertFalse(body.has("endpointUrl"))
+        assertFalse(body.has("signingSecret"))
+    }
+
+    @Test
+    fun `없는 전달 상세는 찾을 수 없음으로 응답한다`() {
+        val response = mockMvc.perform(
+            get("/api/v1/deliveries/${UUID.randomUUID()}")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN"),
+        ).andReturn().response
+        val body = objectMapper.readTree(response.contentAsString)
+
+        assertEquals(404, response.status)
+        assertEquals("DELIVERY_NOT_FOUND", body["code"].asText())
+    }
+
+    @Test
+    fun `잘못된 전달 목록 조건은 요청 오류로 응답한다`() {
+        val invalidStatus = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("status", "unknown"),
+        ).andReturn().response
+        val invalidLimit = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("limit", "101"),
+        ).andReturn().response
+        val invalidCursor = mockMvc.perform(
+            get("/api/v1/deliveries")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer $OPERATOR_TOKEN")
+                .param("cursor", "not-a-cursor"),
+        ).andReturn().response
+
+        assertEquals(400, invalidStatus.status)
+        assertEquals(400, invalidLimit.status)
+        assertEquals(400, invalidCursor.status)
+        assertEquals("REQUEST_INVALID", objectMapper.readTree(invalidStatus.contentAsString)["code"].asText())
+        assertEquals("REQUEST_INVALID", objectMapper.readTree(invalidLimit.contentAsString)["code"].asText())
+        assertEquals("REQUEST_INVALID", objectMapper.readTree(invalidCursor.contentAsString)["code"].asText())
     }
 
     @Test
@@ -572,6 +714,31 @@ class PostgreSqlIntegrationTest {
             UUID::class.java,
         ),
     )
+
+    private fun deliveryIdByEventId(eventId: UUID): UUID = checkNotNull(
+        jdbcTemplate.queryForObject(
+            "SELECT id FROM webhook_deliveries WHERE event_id = ?",
+            UUID::class.java,
+            eventId,
+        ),
+    )
+
+    private fun createDelivery(
+        idempotencyKey: String,
+        createdAt: Instant,
+        status: DeliveryStatus,
+    ): UUID {
+        val accepted = eventIntakeService.accept(eventCommand(idempotencyKey, "{\"orderId\":1}"))
+        val deliveryId = deliveryIdByEventId(accepted.eventId)
+        jdbcTemplate.update(
+            "UPDATE webhook_deliveries SET status = ?, created_at = ?, updated_at = ? WHERE id = ?",
+            status.name,
+            Timestamp.from(createdAt),
+            Timestamp.from(createdAt),
+            deliveryId,
+        )
+        return deliveryId
+    }
 
     private fun deliveryAttemptCount(deliveryId: UUID): Int = checkNotNull(
         jdbcTemplate.queryForObject(

@@ -23,6 +23,7 @@ import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.access.AccessDeniedHandler
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher
+import org.springframework.security.web.util.matcher.OrRequestMatcher
 import org.springframework.security.web.util.matcher.RequestMatcher
 import org.springframework.web.filter.OncePerRequestFilter
 import java.nio.charset.StandardCharsets
@@ -40,6 +41,11 @@ class OperatorApiSecurityConfiguration {
             HttpMethod.POST,
             "/api/v1/deliveries/{deliveryId}/redeliveries",
         )
+        val operatorApiMatcher = OrRequestMatcher(
+            redeliveryMatcher,
+            PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/api/v1/deliveries"),
+            PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/api/v1/deliveries/{deliveryId}"),
+        )
         val authenticationEntryPoint = ApiAuthenticationEntryPoint(objectMapper)
         val accessDeniedHandler = ApiAccessDeniedHandler(objectMapper)
 
@@ -55,11 +61,11 @@ class OperatorApiSecurityConfiguration {
                 it.accessDeniedHandler(accessDeniedHandler)
             }
             .authorizeHttpRequests {
-                it.requestMatchers(redeliveryMatcher).hasAuthority(OPERATOR_AUTHORITY)
+                it.requestMatchers(operatorApiMatcher).hasAuthority(OPERATOR_AUTHORITY)
                 it.anyRequest().permitAll()
             }
             .addFilterBefore(
-                OperatorTokenAuthenticationFilter(redeliveryMatcher, OperatorTokenVerifier(operatorToken)),
+                OperatorTokenAuthenticationFilter(operatorApiMatcher, OperatorTokenVerifier(operatorToken)),
                 AnonymousAuthenticationFilter::class.java,
             )
 
